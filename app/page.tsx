@@ -4,7 +4,7 @@ import dynamic from "next/dynamic";
 import { useMemo, useState } from "react";
 import data from "./data/agg.json";
 
-const Plot = dynamic(() => import("react-plotly.js").then(m => m.default), { ssr: false });
+const Plot = dynamic(() => import("react-plotly.js").then((m) => m.default), { ssr: false });
 
 type Row = {
   model_family?: string;
@@ -12,20 +12,31 @@ type Row = {
   latent_dim?: number;
   alpha?: number;
   alpha_str?: string;
+
   human_corr?: number;
+  n_seeds?: number;
+
   gloss_acc_mean?: number;
-  skybox_acc_mean?: number;
   bumpheight_r2_mean?: number;
 };
 
 const SIZE_MAP: Record<number, number> = { 10: 4, 64: 8, 100: 13, 500: 19, 1000: 26 };
 
+// Styles
+const JEM_BG_OPACITY = 0.21;
+const JEM_FG_OPACITY = 0.95;
+const PIX_OPACITY = 0.95;
+
+const JEM_OUTLINE = { width: 0.6, color: "rgba(255,255,255,1.0)" };
+const PIX_OUTLINE = { width: 1.0, color: "rgba(0,0,0,1.0)" };
+
+const PIX_RED = "rgba(220,20,60,1.0)";
+const HIGHLIGHT_BLUE = "rgba(30,144,255,1.0)";
+
 export default function Page() {
   const rows = data as Row[];
 
-  const [xMetric, setXMetric] = useState<"gloss_acc_mean" | "skybox_acc_mean" | "bumpheight_r2_mean">(
-    "bumpheight_r2_mean"
-  );
+  const [xMetric, setXMetric] = useState<"gloss_acc_mean" | "bumpheight_r2_mean">("bumpheight_r2_mean");
 
   const [jemMode, setJemMode] = useState<"all" | "alpha" | "latent">("all");
   const [jemAlpha, setJemAlpha] = useState<string>("0.0");
@@ -34,18 +45,15 @@ export default function Page() {
   const [pixLatent, setPixLatent] = useState<"off" | "all" | number>("all");
 
   const { jemRows, pixRows, alphaLevels, jemLatents, pixLatents } = useMemo(() => {
-    const jem = rows.filter((r) => (r.model_family || "").toLowerCase().includes("jem"));
-    const pix = rows.filter((r) => (r.model_family || "").toLowerCase().includes("pixel"));
+    const jem = rows.filter((r) => ((r.model_family || "") + "").toLowerCase().includes("jem"));
+    const pix = rows.filter((r) => ((r.model_family || "") + "").toLowerCase().includes("pixel"));
 
     const alphas = Array.from(new Set(jem.map((r) => r.alpha_str).filter(Boolean) as string[])).sort(
       (a, b) => parseFloat(a) - parseFloat(b)
     );
-    const jLat = Array.from(new Set(jem.map((r) => r.latent_dim).filter(Boolean) as number[])).sort(
-      (a, b) => a - b
-    );
-    const pLat = Array.from(new Set(pix.map((r) => r.latent_dim).filter(Boolean) as number[])).sort(
-      (a, b) => a - b
-    );
+
+    const jLat = Array.from(new Set(jem.map((r) => r.latent_dim).filter(Boolean) as number[])).sort((a, b) => a - b);
+    const pLat = Array.from(new Set(pix.map((r) => r.latent_dim).filter(Boolean) as number[])).sort((a, b) => a - b);
 
     return { jemRows: jem, pixRows: pix, alphaLevels: alphas, jemLatents: jLat, pixLatents: pLat };
   }, [rows]);
@@ -63,18 +71,18 @@ export default function Page() {
   if (pixLatent === "all") titleParts.push("PixelVAE=all latents");
   if (typeof pixLatent === "number") titleParts.push(`PixelVAE latent=${pixLatent}`);
 
-  const title = `${xMetric} vs human_corr` + (titleParts.length ? ` — ${titleParts.join(", ")}` : "");
+  const title = `${xMetric.replace("_mean", "")} vs human correlation` + (titleParts.length ? ` — ${titleParts.join(", ")}` : "");
 
   // ----- build traces -----
   const traces = useMemo(() => {
     const out: any[] = [];
 
-    // Filter JEM foreground according to mode
+    // filter JEM foreground
     let jemFg = jemRows;
     if (jemMode === "alpha") jemFg = jemRows.filter((r) => r.alpha_str === jemAlpha);
     if (jemMode === "latent") jemFg = jemRows.filter((r) => r.latent_dim === jemLatent);
 
-    // Background = all JEM dim gray
+    // Background: all JEM as dim gray
     out.push({
       name: "JEM (bg)",
       type: "scatter",
@@ -84,16 +92,17 @@ export default function Page() {
       marker: {
         symbol: "circle",
         color: "rgba(170,170,170,1.0)",
-        opacity: 0.21,
+        opacity: JEM_BG_OPACITY,
         size: jemRows.map((r) => SIZE_MAP[r.latent_dim || 0] ?? 10),
-        line: { width: 0.6, color: "rgba(255,255,255,1.0)" },
+        line: JEM_OUTLINE,
       },
       hoverinfo: "skip",
       showlegend: false,
     });
 
-    // JEM foreground (color by alpha when in "all" or "latent"; single color in alpha mode)
+    // JEM foreground
     if (jemMode === "alpha") {
+      // single highlight color, sizes vary
       out.push({
         name: `JEM selected alpha=${alphaLabel(jemAlpha)}`,
         type: "scatter",
@@ -102,27 +111,28 @@ export default function Page() {
         y: jemFg.map((r) => r.human_corr),
         marker: {
           symbol: "circle",
-          color: "rgba(30,144,255,1.0)",
-          opacity: 0.95,
+          color: HIGHLIGHT_BLUE,
+          opacity: JEM_FG_OPACITY,
           size: jemFg.map((r) => SIZE_MAP[r.latent_dim || 0] ?? 10),
-          line: { width: 0.6, color: "rgba(255,255,255,1.0)" },
+          line: JEM_OUTLINE,
         },
-        text: jemFg.map((r) => `exp=${r.exp}<br>latent=${r.latent_dim}<br>alpha=${r.alpha_str}`),
+        text: jemFg.map((r) => `model=JEM<br>exp=${r.exp}<br>latent=${r.latent_dim}<br>alpha=${r.alpha_str}`),
         hoverinfo: "text+x+y",
       });
     } else {
-      // one trace per alpha (so legend toggles)
-      const alphas = Array.from(new Set(jemFg.map((r) => r.alpha_str).filter(Boolean) as string[])).sort(
+      // one trace per alpha for legend toggles
+      const alphasHere = Array.from(new Set(jemFg.map((r) => r.alpha_str).filter(Boolean) as string[])).sort(
         (a, b) => parseFloat(a) - parseFloat(b)
       );
+
       const colors = [
         "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
         "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
       ];
       const cmap: Record<string, string> = {};
-      alphas.forEach((a, i) => (cmap[a] = colors[i % colors.length]));
+      alphasHere.forEach((a, i) => (cmap[a] = colors[i % colors.length]));
 
-      for (const a of alphas) {
+      for (const a of alphasHere) {
         const dd = jemFg.filter((r) => r.alpha_str === a);
         out.push({
           name: `JEM alpha=${alphaLabel(a)}`,
@@ -133,17 +143,17 @@ export default function Page() {
           marker: {
             symbol: "circle",
             color: cmap[a],
-            opacity: 0.95,
+            opacity: JEM_FG_OPACITY,
             size: dd.map((r) => SIZE_MAP[r.latent_dim || 0] ?? 10),
-            line: { width: 0.6, color: "rgba(255,255,255,1.0)" },
+            line: JEM_OUTLINE,
           },
-          text: dd.map((r) => `exp=${r.exp}<br>latent=${r.latent_dim}<br>alpha=${r.alpha_str}`),
+          text: dd.map((r) => `model=JEM<br>exp=${r.exp}<br>latent=${r.latent_dim}<br>alpha=${r.alpha_str}`),
           hoverinfo: "text+x+y",
         });
       }
     }
 
-    // PixelVAE overlay: red circles with black outline
+    // PixelVAE overlay
     const addPix = (subset: Row[], name: string) => {
       out.push({
         name,
@@ -152,23 +162,20 @@ export default function Page() {
         x: subset.map((r) => (r as any)[xMetric]),
         y: subset.map((r) => r.human_corr),
         marker: {
-          symbol: "circle",
-          color: "rgba(220,20,60,1.0)",
-          opacity: 0.95,
+          symbol: "hexagon", // <-- match your screenshot; change if you prefer
+          color: PIX_RED,
+          opacity: PIX_OPACITY,
           size: subset.map((r) => SIZE_MAP[r.latent_dim || 0] ?? 10),
-          line: { width: 1.0, color: "rgba(0,0,0,1.0)" },
+          line: PIX_OUTLINE,
         },
-        text: subset.map((r) => `exp=${r.exp}<br>latent=${r.latent_dim}<br>alpha=${r.alpha_str}`),
+        text: subset.map((r) => `model=PixelVAE<br>exp=${r.exp}<br>latent=${r.latent_dim}`),
         hoverinfo: "text+x+y",
       });
     };
 
     if (pixLatent === "all") {
-      // one trace per latent for easy toggling
       const dims = Array.from(new Set(pixRows.map((r) => r.latent_dim).filter(Boolean) as number[])).sort((a, b) => a - b);
-      for (const d of dims) {
-        addPix(pixRows.filter((r) => r.latent_dim === d), `PixelVAE latent=${d}`);
-      }
+      for (const d of dims) addPix(pixRows.filter((r) => r.latent_dim === d), `PixelVAE latent=${d}`);
     } else if (typeof pixLatent === "number") {
       addPix(pixRows.filter((r) => r.latent_dim === pixLatent), `PixelVAE latent=${pixLatent}`);
     }
@@ -182,9 +189,8 @@ export default function Page() {
         <label>
           X metric:&nbsp;
           <select value={xMetric} onChange={(e) => setXMetric(e.target.value as any)}>
-            <option value="gloss_acc_mean">gloss_acc_mean</option>
-            <option value="skybox_acc_mean">skybox_acc_mean</option>
-            <option value="bumpheight_r2_mean">bumpheight_r2_mean</option>
+            <option value="gloss_acc_mean">gloss_acc</option>
+            <option value="bumpheight_r2_mean">bumpheight_r2</option>
           </select>
         </label>
 
@@ -199,13 +205,11 @@ export default function Page() {
 
         <label style={{ opacity: jemMode === "alpha" ? 1 : 0.4 }}>
           alpha:&nbsp;
-          <select
-            disabled={jemMode !== "alpha"}
-            value={jemAlpha}
-            onChange={(e) => setJemAlpha(e.target.value)}
-          >
+          <select disabled={jemMode !== "alpha"} value={jemAlpha} onChange={(e) => setJemAlpha(e.target.value)}>
             {alphaLevels.map((a) => (
-              <option key={a} value={a}>{alphaLabel(a)}</option>
+              <option key={a} value={a}>
+                {alphaLabel(a)}
+              </option>
             ))}
           </select>
         </label>
@@ -218,7 +222,9 @@ export default function Page() {
             onChange={(e) => setJemLatent(parseInt(e.target.value))}
           >
             {jemLatents.map((d) => (
-              <option key={d} value={d}>{d}</option>
+              <option key={d} value={d}>
+                {d}
+              </option>
             ))}
           </select>
         </label>
@@ -236,7 +242,9 @@ export default function Page() {
             <option value="off">off</option>
             <option value="all">all latents</option>
             {pixLatents.map((d) => (
-              <option key={d} value={String(d)}>{d}</option>
+              <option key={d} value={String(d)}>
+                {d}
+              </option>
             ))}
           </select>
         </label>
@@ -246,7 +254,7 @@ export default function Page() {
         data={traces}
         layout={{
           title,
-          xaxis: { title: xMetric },
+          xaxis: { title: xMetric.replace("_mean", "") },
           yaxis: { title: "human_corr" },
           margin: { l: 60, r: 20, t: 70, b: 50 },
           legend: { title: { text: "Legend" } },
