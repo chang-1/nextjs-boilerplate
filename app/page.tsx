@@ -28,6 +28,7 @@ const JEM_FG_OPACITY = 0.95;
 const PIX_OPACITY = 0.95;
 
 const JEM_OUTLINE = { width: 0.6, color: "rgba(255,255,255,1.0)" };
+const JEM_OUTLINE_BLACK = { width: 0.6, color: "rgba(0,0,0,1.0)" }; // <-- for alpha=0.0 only
 const PIX_OUTLINE = { width: 1.0, color: "rgba(0,0,0,1.0)" };
 
 const PIX_RED = "rgba(220,20,60,1.0)";
@@ -47,10 +48,9 @@ const PLOTLY_QUAL_PLOTLY = [
   "#FECB52",
 ];
 
-// Force endpoints to be distinct but still "Plotly-like"
+// Subtle override (keep palette feel)
 const ALPHA_OVERRIDES: Record<string, string> = {
-  "0.0": "#636EFA", // Plotly blue
-  "1.0": "#EF553B", // Plotly orange/red
+  "0.0": "#636EFA",
 };
 
 function buildAlphaColorMap(alphaLevels: string[]) {
@@ -126,7 +126,7 @@ export default function Page() {
         color: "rgba(170,170,170,1.0)",
         opacity: JEM_BG_OPACITY,
         size: jemRows.map((r) => SIZE_MAP[r.latent_dim || 0] ?? 10),
-        line: JEM_OUTLINE,
+        line: JEM_OUTLINE, // keep bg outline white as before
       },
       hoverinfo: "skip",
       showlegend: false,
@@ -145,7 +145,7 @@ export default function Page() {
           color: HIGHLIGHT_BLUE,
           opacity: JEM_FG_OPACITY,
           size: jemFg.map((r) => SIZE_MAP[r.latent_dim || 0] ?? 10),
-          line: JEM_OUTLINE,
+          line: jemAlpha === "0.0" ? JEM_OUTLINE_BLACK : JEM_OUTLINE, // <-- only change requested
         },
         text: jemFg.map((r) => `model=JEM<br>exp=${r.exp}<br>latent=${r.latent_dim}<br>alpha=${r.alpha_str}`),
         hoverinfo: "text+x+y",
@@ -170,7 +170,7 @@ export default function Page() {
             color: cmap[a],
             opacity: JEM_FG_OPACITY,
             size: dd.map((r) => SIZE_MAP[r.latent_dim || 0] ?? 10),
-            line: JEM_OUTLINE,
+            line: a === "0.0" ? JEM_OUTLINE_BLACK : JEM_OUTLINE, // <-- only alpha=0.0 gets black outline
           },
           text: dd.map((r) => `model=JEM<br>exp=${r.exp}<br>latent=${r.latent_dim}<br>alpha=${r.alpha_str}`),
           hoverinfo: "text+x+y",
@@ -199,9 +199,7 @@ export default function Page() {
     };
 
     if (pixLatent === "all") {
-      const dims = Array.from(new Set(pixRows.map((r) => r.latent_dim).filter(Boolean) as number[])).sort(
-        (a, b) => a - b
-      );
+      const dims = Array.from(new Set(pixRows.map((r) => r.latent_dim).filter(Boolean) as number[])).sort((a, b) => a - b);
       for (const d of dims) addPix(pixRows.filter((r) => r.latent_dim === d), `PixelVAE latent=${d}`);
     } else if (typeof pixLatent === "number") {
       addPix(pixRows.filter((r) => r.latent_dim === pixLatent), `PixelVAE latent=${pixLatent}`);
