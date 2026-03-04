@@ -20,7 +20,7 @@ type Row = {
   bumpheight_r2_mean?: number;
 };
 
-const SIZE_MAP: Record<number, number> = { 10: 4, 64: 8, 100: 13, 500: 19, 1000: 26 };
+const SIZE_MAP: Record<number, number> = { 10: 6, 64: 10, 100: 15, 500: 21, 1000: 27 };
 
 // Styles
 const JEM_BG_OPACITY = 0.21;
@@ -47,10 +47,10 @@ const PLOTLY_QUAL_PLOTLY = [
   "#FECB52",
 ];
 
-// Force endpoint alphas to be visually distinct (and avoid 0.0 ~= 1.0)
+// Only a subtle override: keep 0.0 in-family but distinct.
+// (No symbol changes, outline stays the same.)
 const ALPHA_OVERRIDES: Record<string, string> = {
-  "0.0": "#00CC96", // green-ish (distinct)
-  "1.0": "#EF553B", // red/orange-ish (distinct)
+  "0.0": "#636EFA", // Plotly blue
 };
 
 function buildAlphaColorMap(alphaLevels: string[]) {
@@ -63,9 +63,6 @@ function buildAlphaColorMap(alphaLevels: string[]) {
   }
   return cmap;
 }
-
-// Optional: make discriminative (0.0) stand out even more via symbol
-const alphaSymbol = (a: string) => (a === "0.0" ? "circle-open" : "circle");
 
 export default function Page() {
   const rows = data as Row[];
@@ -107,7 +104,6 @@ export default function Page() {
 
   const title = `${xMetric.replace("_mean", "")} vs human correlation` + (titleParts.length ? ` — ${titleParts.join(", ")}` : "");
 
-  // ----- build traces -----
   const traces = useMemo(() => {
     const out: any[] = [];
 
@@ -136,7 +132,6 @@ export default function Page() {
 
     // JEM foreground
     if (jemMode === "alpha") {
-      // single highlight color, sizes vary
       out.push({
         name: `JEM selected alpha=${alphaLabel(jemAlpha)}`,
         type: "scatter",
@@ -144,7 +139,7 @@ export default function Page() {
         x: jemFg.map((r) => (r as any)[xMetric]),
         y: jemFg.map((r) => r.human_corr),
         marker: {
-          symbol: alphaSymbol(jemAlpha),
+          symbol: "circle",
           color: HIGHLIGHT_BLUE,
           opacity: JEM_FG_OPACITY,
           size: jemFg.map((r) => SIZE_MAP[r.latent_dim || 0] ?? 10),
@@ -154,7 +149,6 @@ export default function Page() {
         hoverinfo: "text+x+y",
       });
     } else {
-      // one trace per alpha for legend toggles
       const alphasHere = Array.from(new Set(jemFg.map((r) => r.alpha_str).filter(Boolean) as string[])).sort(
         (a, b) => parseFloat(a) - parseFloat(b)
       );
@@ -170,7 +164,7 @@ export default function Page() {
           x: dd.map((r) => (r as any)[xMetric]),
           y: dd.map((r) => r.human_corr),
           marker: {
-            symbol: alphaSymbol(a),
+            symbol: "circle",
             color: cmap[a],
             opacity: JEM_FG_OPACITY,
             size: dd.map((r) => SIZE_MAP[r.latent_dim || 0] ?? 10),
