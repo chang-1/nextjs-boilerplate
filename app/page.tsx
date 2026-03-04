@@ -33,6 +33,40 @@ const PIX_OUTLINE = { width: 1.0, color: "rgba(0,0,0,1.0)" };
 const PIX_RED = "rgba(220,20,60,1.0)";
 const HIGHLIGHT_BLUE = "rgba(30,144,255,1.0)";
 
+// Plotly Express qualitative palette (px.colors.qualitative.Plotly)
+const PLOTLY_QUAL_PLOTLY = [
+  "#636EFA",
+  "#EF553B",
+  "#00CC96",
+  "#AB63FA",
+  "#FFA15A",
+  "#19D3F3",
+  "#FF6692",
+  "#B6E880",
+  "#FF97FF",
+  "#FECB52",
+];
+
+// Force endpoint alphas to be visually distinct (and avoid 0.0 ~= 1.0)
+const ALPHA_OVERRIDES: Record<string, string> = {
+  "0.0": "#00CC96", // green-ish (distinct)
+  "1.0": "#EF553B", // red/orange-ish (distinct)
+};
+
+function buildAlphaColorMap(alphaLevels: string[]) {
+  const cmap: Record<string, string> = {};
+  alphaLevels.forEach((a, i) => {
+    cmap[a] = PLOTLY_QUAL_PLOTLY[i % PLOTLY_QUAL_PLOTLY.length];
+  });
+  for (const [a, c] of Object.entries(ALPHA_OVERRIDES)) {
+    if (a in cmap) cmap[a] = c;
+  }
+  return cmap;
+}
+
+// Optional: make discriminative (0.0) stand out even more via symbol
+const alphaSymbol = (a: string) => (a === "0.0" ? "circle-open" : "circle");
+
 export default function Page() {
   const rows = data as Row[];
 
@@ -110,7 +144,7 @@ export default function Page() {
         x: jemFg.map((r) => (r as any)[xMetric]),
         y: jemFg.map((r) => r.human_corr),
         marker: {
-          symbol: "circle",
+          symbol: alphaSymbol(jemAlpha),
           color: HIGHLIGHT_BLUE,
           opacity: JEM_FG_OPACITY,
           size: jemFg.map((r) => SIZE_MAP[r.latent_dim || 0] ?? 10),
@@ -125,12 +159,7 @@ export default function Page() {
         (a, b) => parseFloat(a) - parseFloat(b)
       );
 
-      const colors = [
-        "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
-        "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
-      ];
-      const cmap: Record<string, string> = {};
-      alphasHere.forEach((a, i) => (cmap[a] = colors[i % colors.length]));
+      const cmap = buildAlphaColorMap(alphasHere);
 
       for (const a of alphasHere) {
         const dd = jemFg.filter((r) => r.alpha_str === a);
@@ -141,7 +170,7 @@ export default function Page() {
           x: dd.map((r) => (r as any)[xMetric]),
           y: dd.map((r) => r.human_corr),
           marker: {
-            symbol: "circle",
+            symbol: alphaSymbol(a),
             color: cmap[a],
             opacity: JEM_FG_OPACITY,
             size: dd.map((r) => SIZE_MAP[r.latent_dim || 0] ?? 10),
@@ -162,7 +191,7 @@ export default function Page() {
         x: subset.map((r) => (r as any)[xMetric]),
         y: subset.map((r) => r.human_corr),
         marker: {
-          symbol: "hexagon", // <-- match your screenshot; change if you prefer
+          symbol: "hexagon",
           color: PIX_RED,
           opacity: PIX_OPACITY,
           size: subset.map((r) => SIZE_MAP[r.latent_dim || 0] ?? 10),
