@@ -47,10 +47,10 @@ const PLOTLY_QUAL_PLOTLY = [
   "#FECB52",
 ];
 
-// Only a subtle override: keep 0.0 in-family but distinct.
-// (No symbol changes, outline stays the same.)
+// Force endpoints to be distinct but still "Plotly-like"
 const ALPHA_OVERRIDES: Record<string, string> = {
   "0.0": "#636EFA", // Plotly blue
+  "1.0": "#EF553B", // Plotly orange/red
 };
 
 function buildAlphaColorMap(alphaLevels: string[]) {
@@ -102,7 +102,9 @@ export default function Page() {
   if (pixLatent === "all") titleParts.push("PixelVAE=all latents");
   if (typeof pixLatent === "number") titleParts.push(`PixelVAE latent=${pixLatent}`);
 
-  const title = `${xMetric.replace("_mean", "")} vs human correlation` + (titleParts.length ? ` — ${titleParts.join(", ")}` : "");
+  const title =
+    `${xMetric.replace("_mean", "")} vs human correlation` +
+    (titleParts.length ? ` — ${titleParts.join(", ")}` : "");
 
   const traces = useMemo(() => {
     const out: any[] = [];
@@ -197,7 +199,9 @@ export default function Page() {
     };
 
     if (pixLatent === "all") {
-      const dims = Array.from(new Set(pixRows.map((r) => r.latent_dim).filter(Boolean) as number[])).sort((a, b) => a - b);
+      const dims = Array.from(new Set(pixRows.map((r) => r.latent_dim).filter(Boolean) as number[])).sort(
+        (a, b) => a - b
+      );
       for (const d of dims) addPix(pixRows.filter((r) => r.latent_dim === d), `PixelVAE latent=${d}`);
     } else if (typeof pixLatent === "number") {
       addPix(pixRows.filter((r) => r.latent_dim === pixLatent), `PixelVAE latent=${pixLatent}`);
