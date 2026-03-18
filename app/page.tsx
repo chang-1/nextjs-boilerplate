@@ -19,13 +19,18 @@ type Row = {
   bumpheight_r2_mean?: number;
 };
 
+const DATASETS = [
+  { id: "w10d28", label: "w10d28", path: "/w10d28.json" },
+  { id: "w8d22", label: "w8d22", path: "/w8d22.json" },
+] as const;
+
 const SIZE_MAP: Record<number, number> = {
   10: 6,
   64: 10,
   100: 15,
   500: 21,
   1000: 27,
-  2000: 32, // <-- added
+  2000: 32,
 };
 
 function sizeForLatent(d?: number) {
@@ -45,26 +50,38 @@ const PIX_OUTLINE = { width: 1.0, color: "rgba(0,0,0,1.0)" };
 const PIX_RED = "rgba(220,20,60,1.0)";
 const HIGHLIGHT_BLUE = "rgba(30,144,255,1.0)";
 
+// Plotly qualitative palette (px.colors.qualitative.Plotly)
 const PLOTLY_QUAL_PLOTLY = [
-  "#636EFA", "#EF553B", "#00CC96", "#AB63FA", "#FFA15A",
-  "#19D3F3", "#FF6692", "#B6E880", "#FF97FF", "#FECB52",
+  "#636EFA",
+  "#EF553B",
+  "#00CC96",
+  "#AB63FA",
+  "#FFA15A",
+  "#19D3F3",
+  "#FF6692",
+  "#B6E880",
+  "#FF97FF",
+  "#FECB52",
 ];
 
-const ALPHA_OVERRIDES: Record<string, string> = { "0.0": "#636EFA" };
+// Optional overrides
+const ALPHA_OVERRIDES: Record<string, string> = {
+  "0.0": "#636EFA",
+};
 
 function buildAlphaColorMap(alphaLevels: string[]) {
   const cmap: Record<string, string> = {};
-  alphaLevels.forEach((a, i) => (cmap[a] = PLOTLY_QUAL_PLOTLY[i % PLOTLY_QUAL_PLOTLY.length]));
-  for (const [a, c] of Object.entries(ALPHA_OVERRIDES)) if (a in cmap) cmap[a] = c;
+  alphaLevels.forEach((a, i) => {
+    cmap[a] = PLOTLY_QUAL_PLOTLY[i % PLOTLY_QUAL_PLOTLY.length];
+  });
+  for (const [a, c] of Object.entries(ALPHA_OVERRIDES)) {
+    if (a in cmap) cmap[a] = c;
+  }
   return cmap;
 }
 
-const DATASETS = [
-  { id: "w10d28", label: "w10d28", path: "/w10d28.json" },
-  { id: "w8d22", label: "w8d22", path: "/w8d22.json" },
-] as const;
-
 export default function Page() {
+  // dataset selection + loading
   const [datasetId, setDatasetId] = useState<(typeof DATASETS)[number]["id"]>("w10d28");
   const datasetPath = DATASETS.find((d) => d.id === datasetId)!.path;
 
@@ -72,7 +89,6 @@ export default function Page() {
   const [loading, setLoading] = useState<boolean>(true);
   const [err, setErr] = useState<string | null>(null);
 
-  // Load JSON whenever dataset changes
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -100,12 +116,16 @@ export default function Page() {
     };
   }, [datasetPath]);
 
+  // UI state
   const [xMetric, setXMetric] = useState<"gloss_acc_mean" | "bumpheight_r2_mean">("bumpheight_r2_mean");
+
   const [jemMode, setJemMode] = useState<"all" | "alpha" | "latent">("all");
   const [jemAlpha, setJemAlpha] = useState<string>("0.0");
   const [jemLatent, setJemLatent] = useState<number>(64);
+
   const [pixLatent, setPixLatent] = useState<"off" | "all" | number>("all");
 
+  // Split JEM vs PixelVAE + derive selector lists
   const { jemRows, pixRows, alphaLevels, jemLatents, pixLatents } = useMemo(() => {
     const jem = rows.filter((r) => ((r.model_family || "") + "").toLowerCase().includes("jem"));
     const pix = rows.filter((r) => ((r.model_family || "") + "").toLowerCase().includes("pixel"));
@@ -120,11 +140,12 @@ export default function Page() {
     return { jemRows: jem, pixRows: pix, alphaLevels: alphas, jemLatents: jLat, pixLatents: pLat };
   }, [rows]);
 
-  // keep selections valid when dataset changes
+  // Keep selections valid when dataset changes
   useEffect(() => {
     if (alphaLevels.length && !alphaLevels.includes(jemAlpha)) setJemAlpha(alphaLevels[0]);
     if (jemLatents.length && !jemLatents.includes(jemLatent)) setJemLatent(jemLatents[0]);
     if (pixLatents.length && typeof pixLatent === "number" && !pixLatents.includes(pixLatent)) setPixLatent("all");
+    if (!pixLatents.length) setPixLatent("off");
   }, [alphaLevels, jemLatents, pixLatents]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const alphaLabel = (a: string) => {
@@ -140,12 +161,14 @@ export default function Page() {
   if (pixLatent === "all") titleParts.push("PixelVAE=all latents");
   if (typeof pixLatent === "number") titleParts.push(`PixelVAE latent=${pixLatent}`);
 
-  const title = `${xMetric.replace("_mean", "")} vs human correlation` + ` — ${titleParts.join(", ")}`;
+  const title =
+    `${xMetric.replace("_mean", "")} vs human correlation` + ` — ${titleParts.join(", ")}`;
 
   const traces = useMemo(() => {
     const out: any[] = [];
     if (!jemRows.length && !pixRows.length) return out;
 
+    // JEM foreground filtering
     let jemFg = jemRows;
     if (jemMode === "alpha") jemFg = jemRows.filter((r) => r.alpha_str === jemAlpha);
     if (jemMode === "latent") jemFg = jemRows.filter((r) => r.latent_dim === jemLatent);
@@ -168,6 +191,7 @@ export default function Page() {
       showlegend: false,
     });
 
+    // JEM foreground
     if (jemMode === "alpha") {
       out.push({
         name: `JEM selected alpha=${alphaLabel(jemAlpha)}`,
@@ -182,13 +206,16 @@ export default function Page() {
           size: jemFg.map((r) => sizeForLatent(r.latent_dim)),
           line: jemAlpha === "0.0" ? JEM_OUTLINE_BLACK : JEM_OUTLINE,
         },
-        text: jemFg.map((r) => `model=JEM<br>exp=${r.exp}<br>latent=${r.latent_dim}<br>alpha=${r.alpha_str}`),
+        text: jemFg.map(
+          (r) => `model=JEM<br>exp=${r.exp}<br>latent=${r.latent_dim}<br>alpha=${r.alpha_str}`
+        ),
         hoverinfo: "text+x+y",
       });
     } else {
       const alphasHere = Array.from(new Set(jemFg.map((r) => r.alpha_str).filter(Boolean) as string[])).sort(
         (a, b) => parseFloat(a) - parseFloat(b)
       );
+
       const cmap = buildAlphaColorMap(alphasHere);
 
       for (const a of alphasHere) {
@@ -206,13 +233,15 @@ export default function Page() {
             size: dd.map((r) => sizeForLatent(r.latent_dim)),
             line: a === "0.0" ? JEM_OUTLINE_BLACK : JEM_OUTLINE,
           },
-          text: dd.map((r) => `model=JEM<br>exp=${r.exp}<br>latent=${r.latent_dim}<br>alpha=${r.alpha_str}`),
+          text: dd.map(
+            (r) => `model=JEM<br>exp=${r.exp}<br>latent=${r.latent_dim}<br>alpha=${r.alpha_str}`
+          ),
           hoverinfo: "text+x+y",
         });
       }
     }
 
-    // PixelVAE overlay (hexagon, red, black outline)
+    // PixelVAE overlay
     const addPix = (subset: Row[], name: string) => {
       out.push({
         name,
@@ -286,7 +315,11 @@ export default function Page() {
 
         <label style={{ opacity: jemMode === "latent" ? 1 : 0.4 }}>
           JEM latent:&nbsp;
-          <select disabled={jemMode !== "latent"} value={jemLatent} onChange={(e) => setJemLatent(parseInt(e.target.value))}>
+          <select
+            disabled={jemMode !== "latent"}
+            value={jemLatent}
+            onChange={(e) => setJemLatent(parseInt(e.target.value))}
+          >
             {jemLatents.map((d) => (
               <option key={d} value={d}>
                 {d}
