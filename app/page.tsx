@@ -16,13 +16,9 @@ type Row = {
   n_seeds?: number;
 
   gloss_acc_mean?: number;
+  skybox_acc_mean?: number;
   bumpheight_r2_mean?: number;
 };
-
-const DATASETS = [
-  { id: "w10d28", label: "w10d28", path: "/w10d28.json" },
-  { id: "w8d22", label: "w8d22", path: "/w8d22.json" },
-] as const;
 
 const SIZE_MAP: Record<number, number> = {
   10: 6,
@@ -30,12 +26,12 @@ const SIZE_MAP: Record<number, number> = {
   100: 15,
   500: 21,
   1000: 27,
-  2000: 32,
+  2000: 32, // added
 };
 
 function sizeForLatent(d?: number) {
   if (!d) return 10;
-  return SIZE_MAP[d] ?? Math.min(32, Math.max(6, Math.round(6 + 10 * Math.log10(d))));
+  return SIZE_MAP[d] ?? Math.min(34, Math.max(6, Math.round(6 + 10 * Math.log10(d))));
 }
 
 // Styles
@@ -44,7 +40,7 @@ const JEM_FG_OPACITY = 0.95;
 const PIX_OPACITY = 0.95;
 
 const JEM_OUTLINE = { width: 0.6, color: "rgba(255,255,255,1.0)" };
-const JEM_OUTLINE_BLACK = { width: 0.6, color: "rgba(0,0,0,1.0)" };
+const JEM_OUTLINE_BLACK = { width: 0.6, color: "rgba(0,0,0,1.0)" }; // alpha=0.0 only
 const PIX_OUTLINE = { width: 1.0, color: "rgba(0,0,0,1.0)" };
 
 const PIX_RED = "rgba(220,20,60,1.0)";
@@ -64,7 +60,6 @@ const PLOTLY_QUAL_PLOTLY = [
   "#FECB52",
 ];
 
-// Optional overrides
 const ALPHA_OVERRIDES: Record<string, string> = {
   "0.0": "#636EFA",
 };
@@ -80,11 +75,23 @@ function buildAlphaColorMap(alphaLevels: string[]) {
   return cmap;
 }
 
+// Put these files in /public
+const DATASETS = [
+  { id: "w10d28", label: "w10d28", path: "/w10d28.json" },
+  { id: "w8d22", label: "w8d22", path: "/w8d22.json" },
+] as const;
+
+type DatasetId = (typeof DATASETS)[number]["id"];
+type XMetric = "gloss_acc_mean" | "skybox_acc_mean" | "bumpheight_r2_mean";
+type JemMode = "all" | "alpha" | "latent";
+type PixLatent = "off" | "all" | number;
+
 export default function Page() {
-  // dataset selection + loading
-  const [datasetId, setDatasetId] = useState<(typeof DATASETS)[number]["id"]>("w10d28");
+  // dataset selector
+  const [datasetId, setDatasetId] = useState<DatasetId>("w10d28");
   const datasetPath = DATASETS.find((d) => d.id === datasetId)!.path;
 
+  // loaded data
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [err, setErr] = useState<string | null>(null);
@@ -116,16 +123,16 @@ export default function Page() {
     };
   }, [datasetPath]);
 
-  // UI state
-  const [xMetric, setXMetric] = useState<"gloss_acc_mean" | "bumpheight_r2_mean">("bumpheight_r2_mean");
+  // controls
+  const [xMetric, setXMetric] = useState<XMetric>("bumpheight_r2_mean");
 
-  const [jemMode, setJemMode] = useState<"all" | "alpha" | "latent">("all");
+  const [jemMode, setJemMode] = useState<JemMode>("all");
   const [jemAlpha, setJemAlpha] = useState<string>("0.0");
   const [jemLatent, setJemLatent] = useState<number>(64);
 
-  const [pixLatent, setPixLatent] = useState<"off" | "all" | number>("all");
+  const [pixLatent, setPixLatent] = useState<PixLatent>("all");
 
-  // Split JEM vs PixelVAE + derive selector lists
+  // split + option lists
   const { jemRows, pixRows, alphaLevels, jemLatents, pixLatents } = useMemo(() => {
     const jem = rows.filter((r) => ((r.model_family || "") + "").toLowerCase().includes("jem"));
     const pix = rows.filter((r) => ((r.model_family || "") + "").toLowerCase().includes("pixel"));
@@ -140,12 +147,12 @@ export default function Page() {
     return { jemRows: jem, pixRows: pix, alphaLevels: alphas, jemLatents: jLat, pixLatents: pLat };
   }, [rows]);
 
-  // Keep selections valid when dataset changes
+  // keep selections valid when dataset changes
   useEffect(() => {
     if (alphaLevels.length && !alphaLevels.includes(jemAlpha)) setJemAlpha(alphaLevels[0]);
     if (jemLatents.length && !jemLatents.includes(jemLatent)) setJemLatent(jemLatents[0]);
     if (pixLatents.length && typeof pixLatent === "number" && !pixLatents.includes(pixLatent)) setPixLatent("all");
-    if (!pixLatents.length) setPixLatent("off");
+    if (!pixLatents.length && pixLatent !== "off") setPixLatent("off");
   }, [alphaLevels, jemLatents, pixLatents]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const alphaLabel = (a: string) => {
@@ -154,6 +161,9 @@ export default function Page() {
     return a;
   };
 
+  const metricLabel = (m: XMetric) => m.replace("_mean", "");
+
+  // title
   const titleParts: string[] = [`dataset=${datasetId}`];
   if (jemMode === "alpha") titleParts.push(`alpha=${alphaLabel(jemAlpha)}`);
   if (jemMode === "latent") titleParts.push(`JEM latent=${jemLatent}`);
@@ -161,14 +171,13 @@ export default function Page() {
   if (pixLatent === "all") titleParts.push("PixelVAE=all latents");
   if (typeof pixLatent === "number") titleParts.push(`PixelVAE latent=${pixLatent}`);
 
-  const title =
-    `${xMetric.replace("_mean", "")} vs human correlation` + ` — ${titleParts.join(", ")}`;
+  const title = `${metricLabel(xMetric)} vs human correlation — ${titleParts.join(", ")}`;
 
+  // traces
   const traces = useMemo(() => {
     const out: any[] = [];
     if (!jemRows.length && !pixRows.length) return out;
 
-    // JEM foreground filtering
     let jemFg = jemRows;
     if (jemMode === "alpha") jemFg = jemRows.filter((r) => r.alpha_str === jemAlpha);
     if (jemMode === "latent") jemFg = jemRows.filter((r) => r.latent_dim === jemLatent);
@@ -206,16 +215,13 @@ export default function Page() {
           size: jemFg.map((r) => sizeForLatent(r.latent_dim)),
           line: jemAlpha === "0.0" ? JEM_OUTLINE_BLACK : JEM_OUTLINE,
         },
-        text: jemFg.map(
-          (r) => `model=JEM<br>exp=${r.exp}<br>latent=${r.latent_dim}<br>alpha=${r.alpha_str}`
-        ),
+        text: jemFg.map((r) => `model=JEM<br>exp=${r.exp}<br>latent=${r.latent_dim}<br>alpha=${r.alpha_str}`),
         hoverinfo: "text+x+y",
       });
     } else {
       const alphasHere = Array.from(new Set(jemFg.map((r) => r.alpha_str).filter(Boolean) as string[])).sort(
         (a, b) => parseFloat(a) - parseFloat(b)
       );
-
       const cmap = buildAlphaColorMap(alphasHere);
 
       for (const a of alphasHere) {
@@ -233,9 +239,7 @@ export default function Page() {
             size: dd.map((r) => sizeForLatent(r.latent_dim)),
             line: a === "0.0" ? JEM_OUTLINE_BLACK : JEM_OUTLINE,
           },
-          text: dd.map(
-            (r) => `model=JEM<br>exp=${r.exp}<br>latent=${r.latent_dim}<br>alpha=${r.alpha_str}`
-          ),
+          text: dd.map((r) => `model=JEM<br>exp=${r.exp}<br>latent=${r.latent_dim}<br>alpha=${r.alpha_str}`),
           hoverinfo: "text+x+y",
         });
       }
@@ -276,7 +280,7 @@ export default function Page() {
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
         <label>
           Dataset:&nbsp;
-          <select value={datasetId} onChange={(e) => setDatasetId(e.target.value as any)}>
+          <select value={datasetId} onChange={(e) => setDatasetId(e.target.value as DatasetId)}>
             {DATASETS.map((d) => (
               <option key={d.id} value={d.id}>
                 {d.label}
@@ -287,15 +291,16 @@ export default function Page() {
 
         <label>
           X metric:&nbsp;
-          <select value={xMetric} onChange={(e) => setXMetric(e.target.value as any)}>
+          <select value={xMetric} onChange={(e) => setXMetric(e.target.value as XMetric)}>
             <option value="gloss_acc_mean">gloss_acc</option>
+            <option value="skybox_acc_mean">skybox_acc</option>
             <option value="bumpheight_r2_mean">bumpheight_r2</option>
           </select>
         </label>
 
         <label>
           JEM mode:&nbsp;
-          <select value={jemMode} onChange={(e) => setJemMode(e.target.value as any)}>
+          <select value={jemMode} onChange={(e) => setJemMode(e.target.value as JemMode)}>
             <option value="all">All</option>
             <option value="alpha">Pick alpha</option>
             <option value="latent">Pick latent</option>
@@ -356,7 +361,7 @@ export default function Page() {
         data={traces}
         layout={{
           title,
-          xaxis: { title: xMetric.replace("_mean", "") },
+          xaxis: { title: metricLabel(xMetric) },
           yaxis: { title: "human_corr" },
           margin: { l: 60, r: 20, t: 70, b: 50 },
           legend: { title: { text: "Legend" } },
