@@ -1,8 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useMemo, useState } from "react";
-import data from "./data/agg.json";
+import { useEffect, useMemo, useState } from "react";
 
 const Plot = dynamic(() => import("react-plotly.js").then((m) => m.default), { ssr: false });
 
@@ -20,7 +19,19 @@ type Row = {
   bumpheight_r2_mean?: number;
 };
 
-const SIZE_MAP: Record<number, number> = { 10: 6, 64: 10, 100: 15, 500: 21, 1000: 27 };
+const SIZE_MAP: Record<number, number> = {
+  10: 6,
+  64: 10,
+  100: 15,
+  500: 21,
+  1000: 27,
+  2000: 32, // <-- added
+};
+
+function sizeForLatent(d?: number) {
+  if (!d) return 10;
+  return SIZE_MAP[d] ?? Math.min(32, Math.max(6, Math.round(6 + 10 * Math.log10(d))));
+}
 
 // Styles
 const JEM_BG_OPACITY = 0.21;
@@ -28,51 +39,71 @@ const JEM_FG_OPACITY = 0.95;
 const PIX_OPACITY = 0.95;
 
 const JEM_OUTLINE = { width: 0.6, color: "rgba(255,255,255,1.0)" };
-const JEM_OUTLINE_BLACK = { width: 0.6, color: "rgba(0,0,0,1.0)" }; // <-- for alpha=0.0 only
+const JEM_OUTLINE_BLACK = { width: 0.6, color: "rgba(0,0,0,1.0)" };
 const PIX_OUTLINE = { width: 1.0, color: "rgba(0,0,0,1.0)" };
 
 const PIX_RED = "rgba(220,20,60,1.0)";
 const HIGHLIGHT_BLUE = "rgba(30,144,255,1.0)";
 
-// Plotly Express qualitative palette (px.colors.qualitative.Plotly)
 const PLOTLY_QUAL_PLOTLY = [
-  "#636EFA",
-  "#EF553B",
-  "#00CC96",
-  "#AB63FA",
-  "#FFA15A",
-  "#19D3F3",
-  "#FF6692",
-  "#B6E880",
-  "#FF97FF",
-  "#FECB52",
+  "#636EFA", "#EF553B", "#00CC96", "#AB63FA", "#FFA15A",
+  "#19D3F3", "#FF6692", "#B6E880", "#FF97FF", "#FECB52",
 ];
 
-// Subtle override (keep palette feel)
-const ALPHA_OVERRIDES: Record<string, string> = {
-  "0.0": "#636EFA",
-};
+const ALPHA_OVERRIDES: Record<string, string> = { "0.0": "#636EFA" };
 
 function buildAlphaColorMap(alphaLevels: string[]) {
   const cmap: Record<string, string> = {};
-  alphaLevels.forEach((a, i) => {
-    cmap[a] = PLOTLY_QUAL_PLOTLY[i % PLOTLY_QUAL_PLOTLY.length];
-  });
-  for (const [a, c] of Object.entries(ALPHA_OVERRIDES)) {
-    if (a in cmap) cmap[a] = c;
-  }
+  alphaLevels.forEach((a, i) => (cmap[a] = PLOTLY_QUAL_PLOTLY[i % PLOTLY_QUAL_PLOTLY.length]));
+  for (const [a, c] of Object.entries(ALPHA_OVERRIDES)) if (a in cmap) cmap[a] = c;
   return cmap;
 }
 
+const DATASETS = [
+  { id: "w10d28", label: "w10d28", path: "/w10d28.json" },
+  { id: "w8d22", label: "w8d22", path: "/w8d22.json" },
+] as const;
+
 export default function Page() {
-  const rows = data as Row[];
+  const [datasetId, setDatasetId] = useState<(typeof DATASETS)[number]["id"]>("w10d28");
+  const datasetPath = DATASETS.find((d) => d.id === datasetId)!.path;
+
+  const [rows, setRows] = useState<Row[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [err, setErr] = useState<string | null>(null);
+
+  // Load JSON whenever dataset changes
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setErr(null);
+
+    fetch(datasetPath)
+      .then((r) => {
+        if (!r.ok) throw new Error(`Failed to fetch ${datasetPath}: ${r.status}`);
+        return r.json();
+      })
+      .then((json) => {
+        if (cancelled) return;
+        setRows(json as Row[]);
+        setLoading(false);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setErr(String(e));
+        setRows([]);
+        setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [datasetPath]);
 
   const [xMetric, setXMetric] = useState<"gloss_acc_mean" | "bumpheight_r2_mean">("bumpheight_r2_mean");
-
   const [jemMode, setJemMode] = useState<"all" | "alpha" | "latent">("all");
   const [jemAlpha, setJemAlpha] = useState<string>("0.0");
   const [jemLatent, setJemLatent] = useState<number>(64);
-
   const [pixLatent, setPixLatent] = useState<"off" | "all" | number>("all");
 
   const { jemRows, pixRows, alphaLevels, jemLatents, pixLatents } = useMemo(() => {
@@ -89,32 +120,37 @@ export default function Page() {
     return { jemRows: jem, pixRows: pix, alphaLevels: alphas, jemLatents: jLat, pixLatents: pLat };
   }, [rows]);
 
+  // keep selections valid when dataset changes
+  useEffect(() => {
+    if (alphaLevels.length && !alphaLevels.includes(jemAlpha)) setJemAlpha(alphaLevels[0]);
+    if (jemLatents.length && !jemLatents.includes(jemLatent)) setJemLatent(jemLatents[0]);
+    if (pixLatents.length && typeof pixLatent === "number" && !pixLatents.includes(pixLatent)) setPixLatent("all");
+  }, [alphaLevels, jemLatents, pixLatents]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const alphaLabel = (a: string) => {
     if (a === "0.0") return "0.0 (discriminative)";
     if (a === "1.0") return "1.0 (generative)";
     return a;
   };
 
-  const titleParts: string[] = [];
+  const titleParts: string[] = [`dataset=${datasetId}`];
   if (jemMode === "alpha") titleParts.push(`alpha=${alphaLabel(jemAlpha)}`);
   if (jemMode === "latent") titleParts.push(`JEM latent=${jemLatent}`);
   if (pixLatent === "off") titleParts.push("PixelVAE=off");
   if (pixLatent === "all") titleParts.push("PixelVAE=all latents");
   if (typeof pixLatent === "number") titleParts.push(`PixelVAE latent=${pixLatent}`);
 
-  const title =
-    `${xMetric.replace("_mean", "")} vs human correlation` +
-    (titleParts.length ? ` — ${titleParts.join(", ")}` : "");
+  const title = `${xMetric.replace("_mean", "")} vs human correlation` + ` — ${titleParts.join(", ")}`;
 
   const traces = useMemo(() => {
     const out: any[] = [];
+    if (!jemRows.length && !pixRows.length) return out;
 
-    // filter JEM foreground
     let jemFg = jemRows;
     if (jemMode === "alpha") jemFg = jemRows.filter((r) => r.alpha_str === jemAlpha);
     if (jemMode === "latent") jemFg = jemRows.filter((r) => r.latent_dim === jemLatent);
 
-    // Background: all JEM as dim gray
+    // JEM background
     out.push({
       name: "JEM (bg)",
       type: "scatter",
@@ -125,14 +161,13 @@ export default function Page() {
         symbol: "circle",
         color: "rgba(170,170,170,1.0)",
         opacity: JEM_BG_OPACITY,
-        size: jemRows.map((r) => SIZE_MAP[r.latent_dim || 0] ?? 10),
-        line: JEM_OUTLINE, // keep bg outline white as before
+        size: jemRows.map((r) => sizeForLatent(r.latent_dim)),
+        line: JEM_OUTLINE,
       },
       hoverinfo: "skip",
       showlegend: false,
     });
 
-    // JEM foreground
     if (jemMode === "alpha") {
       out.push({
         name: `JEM selected alpha=${alphaLabel(jemAlpha)}`,
@@ -144,8 +179,8 @@ export default function Page() {
           symbol: "circle",
           color: HIGHLIGHT_BLUE,
           opacity: JEM_FG_OPACITY,
-          size: jemFg.map((r) => SIZE_MAP[r.latent_dim || 0] ?? 10),
-          line: jemAlpha === "0.0" ? JEM_OUTLINE_BLACK : JEM_OUTLINE, // <-- only change requested
+          size: jemFg.map((r) => sizeForLatent(r.latent_dim)),
+          line: jemAlpha === "0.0" ? JEM_OUTLINE_BLACK : JEM_OUTLINE,
         },
         text: jemFg.map((r) => `model=JEM<br>exp=${r.exp}<br>latent=${r.latent_dim}<br>alpha=${r.alpha_str}`),
         hoverinfo: "text+x+y",
@@ -154,7 +189,6 @@ export default function Page() {
       const alphasHere = Array.from(new Set(jemFg.map((r) => r.alpha_str).filter(Boolean) as string[])).sort(
         (a, b) => parseFloat(a) - parseFloat(b)
       );
-
       const cmap = buildAlphaColorMap(alphasHere);
 
       for (const a of alphasHere) {
@@ -169,8 +203,8 @@ export default function Page() {
             symbol: "circle",
             color: cmap[a],
             opacity: JEM_FG_OPACITY,
-            size: dd.map((r) => SIZE_MAP[r.latent_dim || 0] ?? 10),
-            line: a === "0.0" ? JEM_OUTLINE_BLACK : JEM_OUTLINE, // <-- only alpha=0.0 gets black outline
+            size: dd.map((r) => sizeForLatent(r.latent_dim)),
+            line: a === "0.0" ? JEM_OUTLINE_BLACK : JEM_OUTLINE,
           },
           text: dd.map((r) => `model=JEM<br>exp=${r.exp}<br>latent=${r.latent_dim}<br>alpha=${r.alpha_str}`),
           hoverinfo: "text+x+y",
@@ -178,7 +212,7 @@ export default function Page() {
       }
     }
 
-    // PixelVAE overlay
+    // PixelVAE overlay (hexagon, red, black outline)
     const addPix = (subset: Row[], name: string) => {
       out.push({
         name,
@@ -190,7 +224,7 @@ export default function Page() {
           symbol: "hexagon",
           color: PIX_RED,
           opacity: PIX_OPACITY,
-          size: subset.map((r) => SIZE_MAP[r.latent_dim || 0] ?? 10),
+          size: subset.map((r) => sizeForLatent(r.latent_dim)),
           line: PIX_OUTLINE,
         },
         text: subset.map((r) => `model=PixelVAE<br>exp=${r.exp}<br>latent=${r.latent_dim}`),
@@ -211,6 +245,17 @@ export default function Page() {
   return (
     <div style={{ padding: 18, display: "grid", gap: 12 }}>
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+        <label>
+          Dataset:&nbsp;
+          <select value={datasetId} onChange={(e) => setDatasetId(e.target.value as any)}>
+            {DATASETS.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.label}
+              </option>
+            ))}
+          </select>
+        </label>
+
         <label>
           X metric:&nbsp;
           <select value={xMetric} onChange={(e) => setXMetric(e.target.value as any)}>
@@ -241,11 +286,7 @@ export default function Page() {
 
         <label style={{ opacity: jemMode === "latent" ? 1 : 0.4 }}>
           JEM latent:&nbsp;
-          <select
-            disabled={jemMode !== "latent"}
-            value={jemLatent}
-            onChange={(e) => setJemLatent(parseInt(e.target.value))}
-          >
+          <select disabled={jemMode !== "latent"} value={jemLatent} onChange={(e) => setJemLatent(parseInt(e.target.value))}>
             {jemLatents.map((d) => (
               <option key={d} value={d}>
                 {d}
@@ -273,6 +314,9 @@ export default function Page() {
             ))}
           </select>
         </label>
+
+        {loading && <span style={{ opacity: 0.7 }}>loading…</span>}
+        {err && <span style={{ color: "crimson" }}>{err}</span>}
       </div>
 
       <Plot
