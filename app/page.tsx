@@ -363,7 +363,10 @@ export default function Page() {
         layout={{
           title,
           xaxis: { title: metricLabel(xMetric) },
-          yaxis: { title: "human_corr" },
+          yaxis: {
+            title: "human_corr",
+            ...(datasetId === "w8d22_nosvm" ? { dtick: 0.5, tick0: 0 } : {}),
+          },
           margin: { l: 60, r: 20, t: 70, b: 50 },
           legend: { title: { text: "Legend" } },
         }}
