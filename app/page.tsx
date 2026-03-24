@@ -365,7 +365,7 @@ export default function Page() {
           xaxis: { title: metricLabel(xMetric) },
           yaxis: {
             title: "human_corr",
-            ...(datasetId === "w8d22_nosvm" ? { dtick: 0.5, tick0: 0 } : {}),
+            ...(datasetId === "w8d22_nosvm" ? { dtick: 0.05, tick0: 0 } : {}),
           },
           margin: { l: 60, r: 20, t: 70, b: 50 },
           legend: { title: { text: "Legend" } },
