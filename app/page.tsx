@@ -79,6 +79,7 @@ function buildAlphaColorMap(alphaLevels: string[]) {
 const DATASETS = [
   { id: "w10d28", label: "w10d28", path: "/w10d28.json" },
   { id: "w8d22", label: "w8d22", path: "/w8d22.json" },
+  { id: "w8d22_nosvm", label: "w8d22_nosvm", path: "/w8d22_nosvm.json" },
 ] as const;
 
 type DatasetId = (typeof DATASETS)[number]["id"];
