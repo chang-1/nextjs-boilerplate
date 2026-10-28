@@ -1,325 +1,262 @@
 "use client";
 
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
-import Image from "next/image";
 import styles from "./explorer.module.css";
 
-type PredictionRow = {
-  id: string;
-  y: number;
-  p: number[]; // predicted ImageNet category ID per alpha
-  c: number[]; // probability of each model's predicted top-1 category
-  r: number[]; // ground-truth category rank (1 is top-1)
-  q: number[]; // probability assigned to the ground-truth category
-  thumb?: string; // optional relative path, e.g. thumbs/00042.webp
+type Kind = "rescued" | "regressed";
+type ImageRow = {
+  datasetIndex: number;
+  filename: string;
+  kind: Kind;
+  trueLabel: number;
+  trueClassName: string;
+  baselinePred: number;
+  baselineClassName: string;
+  hybridPred: number;
+  hybridClassName: string;
+  confidence0: number | null;
+  confidence01: number | null;
+  crop: string | null;
 };
-
-type ExportFile = {
-  schemaVersion: 1;
+type RescueData = {
+  schemaVersion: 2;
   meta: {
     dataset: string;
     seed: number;
-    alphas: number[];
-    nImages: number;
-    thumbnailCount: number;
-    classNames?: string[];
-    createdAt?: string;
-    checkpoints?: Record<string, string>;
+    baselineAlpha: number;
+    hybridAlpha: number;
+    nEvaluated: number;
+    nChanged: number;
+    nRescued: number;
+    nRegressed: number;
+    nCrops: number;
+    source: string;
   };
-  rows: PredictionRow[];
+  rows: ImageRow[];
 };
+type Status = "Both" | "Rescued" | "Regressed";
+type Tab = "Gallery" | "Class counts" | "Confusions";
+type Sort = "ImageNet order" | "Class" | "Random" | "Hybrid confidence high to low" | "Hybrid confidence low to high";
+const number = (n: number) => n.toLocaleString("en-US");
+const confidence = (n: number | null) => n === null || n === undefined ? "" : ` (${(n * 100).toFixed(1)}%)`;
+const numeric = (v: number) => String(v).padStart(4, "0");
+const deterministicRandom = (id: number) => ((Math.imul(id + 42, 2654435761) >>> 0) / 4294967296);
 
-type Outcome =
-  | "rescued"
-  | "lost"
-  | "any"
-  | "majority"
-  | "unanimous"
-  | "rank-up"
-  | "rank-down"
-  | "both-correct"
-  | "both-wrong";
-
-type Ordering = "gain" | "drop" | "rank" | "index";
-
-const PAGE_SIZE = 24;
-const ALPHA_TOLERANCE = 1e-6;
-const fmt = (num: number) => num.toLocaleString("en-US");
-const pct = (num: number, total: number) => `${total ? ((100 * num) / total).toFixed(2) : "0.00"}%`;
-const classId = (x: number) => String(x).padStart(3, "0");
-const alphaText = (x: number) => x.toFixed(1);
-
-function labelFor(data: ExportFile, id: number): string {
-  return data.meta.classNames?.[id] || `ImageNet class ${classId(id)}`;
-}
-function getStatus(row: PredictionRow, selected: number): {
-  rescued: boolean;
-  lost: boolean;
-  rankUp: boolean;
-  rankDown: boolean;
-  bothCorrect: boolean;
-  bothWrong: boolean;
-  rescueCount: number;
-} {
-  const baseCorrect = row.p[0] === row.y;
-  const candidate = selected < 0 ? row.p.slice(1) : [row.p[selected]];
-  const candidateRanks = selected < 0 ? row.r.slice(1) : [row.r[selected]];
-  const rescueCount = row.p.slice(1).filter((p) => p === row.y).length;
-  const candidateCorrect = candidate.some((p) => p === row.y);
-  const allCandidateCorrect = candidate.every((p) => p === row.y);
-  const allCandidateWrong = candidate.every((p) => p !== row.y);
-  return {
-    rescued: !baseCorrect && candidateCorrect,
-    lost: baseCorrect && !allCandidateCorrect,
-    rankUp: candidateRanks.some((r) => r < row.r[0]),
-    rankDown: selected < 0 ? candidateRanks.every((r) => r > row.r[0]) : candidateRanks[0] > row.r[0],
-    bothCorrect: baseCorrect && allCandidateCorrect,
-    bothWrong: !baseCorrect && allCandidateWrong,
-    rescueCount,
-  };
-}
-
-function getDisplayIndex(row: PredictionRow, selected: number): number {
-  if (selected >= 0) return selected;
-  // In the collective view, show the hybrid with the highest ground-truth probability.
-  let best = 1;
-  for (let j = 2; j < row.q.length; j += 1) {
-    if (row.q[j] > row.q[best]) best = j;
-  }
-  return best;
-}
-
-function Stat({ label, value, detail, variant = "default" }: {
-  label: string; value: string; detail: string; variant?: "default" | "good" | "bad";
-}) {
-  return <div className={styles.stat}>
-    <div className={styles.statLabel}>{label}</div>
-    <div className={`${styles.statValue} ${variant === "good" ? styles.good : variant === "bad" ? styles.bad : ""}`}>{value}</div>
-    <div className={styles.statDetail}>{detail}</div>
-  </div>;
+function downloadCsv(name: string, rows: Record<string, string | number | null>[]) {
+  if (!rows.length) return;
+  const keys = Object.keys(rows[0]);
+  const escape = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const csv = [keys.map(escape).join(","), ...rows.map(r => keys.map(k => escape(r[k])).join(","))].join("\n");
+  const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 export default function Explorer() {
-  const [data, setData] = useState<ExportFile | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [data, setData] = useState<RescueData | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [alpha, setAlpha] = useState("0.3");
-  const [outcome, setOutcome] = useState<Outcome>("rescued");
-  const [sort, setSort] = useState<Ordering>("gain");
-  const [search, setSearch] = useState("");
-  const [classFilter, setClassFilter] = useState<number | null>(null);
-  const [thumbOnly, setThumbOnly] = useState(true);
+  const [status, setStatus] = useState<Status>("Both");
+  const [trueClass, setTrueClass] = useState<string>("all");
+  const [query, setQuery] = useState("");
+  const [sort, setSort] = useState<Sort>("ImageNet order");
+  const [pageSize, setPageSize] = useState(24);
   const [page, setPage] = useState(1);
-  const deferredSearch = useDeferredValue(search.trim().toLowerCase());
+  const [tab, setTab] = useState<Tab>("Gallery");
+  const search = useDeferredValue(query.trim().toLowerCase());
 
   useEffect(() => {
-    let active = true;
-    async function load() {
-      try {
-        const response = await fetch("/jem-analysis/results.json");
-        if (!response.ok) throw new Error(`Results not found (HTTP ${response.status}).`);
-        const json: unknown = await response.json();
-        if (!json || typeof json !== "object" || !("schemaVersion" in json) || !("rows" in json) || !("meta" in json)) {
-          throw new Error("Invalid results.json structure.");
+    let valid = true;
+    fetch("/jem-analysis/results.json")
+      .then(async response => {
+        if (!response.ok) throw new Error(`Could not load /jem-analysis/results.json (HTTP ${response.status})`);
+        return response.json() as Promise<RescueData>;
+      })
+      .then(json => {
+        if (json.schemaVersion !== 2 || json.meta?.baselineAlpha !== 0 ||
+            json.meta.hybridAlpha !== 0.1 || !Array.isArray(json.rows)) {
+          throw new Error("Incompatible data. Use pack_existing_streamlit_data.py on your existing Streamlit CSV.");
         }
-        const parsed = json as ExportFile;
-        if (parsed.schemaVersion !== 1 || !Array.isArray(parsed.rows) || !Array.isArray(parsed.meta.alphas)) {
-          throw new Error("Unsupported results.json schema. Expected version 1.");
-        }
-        if (!parsed.meta.alphas.includes(0) || parsed.rows.some((r) => !Array.isArray(r.p) || r.p.length !== parsed.meta.alphas.length)) {
-          throw new Error("Invalid alpha ordering or prediction arrays in results.json.");
-        }
-        if (active) {
-          setData(parsed);
-          setAlpha(alphaText(parsed.meta.alphas.find((a) => Math.abs(a - 0.3) < ALPHA_TOLERANCE) ?? parsed.meta.alphas[1]));
-          setThumbOnly(parsed.meta.thumbnailCount > 0);
-        }
-      } catch (e) {
-        if (active) setError(e instanceof Error ? e.message : String(e));
-      } finally {
-        if (active) setLoading(false);
-      }
-    }
-    load();
-    return () => { active = false; };
+        if (valid) setData(json);
+      })
+      .catch(e => { if (valid) setError(e instanceof Error ? e.message : String(e)); });
+    return () => { valid = false; };
   }, []);
 
-  const selectedIdx = useMemo(() => {
-    if (!data || alpha === "any") return -1;
-    const idx = data.meta.alphas.findIndex((a) => Math.abs(a - Number(alpha)) < ALPHA_TOLERANCE);
-    return idx > 0 ? idx : -1;
-  }, [alpha, data]);
-
-  const modelStats = useMemo(() => {
+  const classes = useMemo(() => {
     if (!data) return [];
-    return data.meta.alphas.map((a, i) => {
-      const correct = data.rows.reduce((n, r) => n + Number(r.p[i] === r.y), 0);
-      const top5 = data.rows.reduce((n, r) => n + Number(r.r[i] <= 5), 0);
-      const rescued = i === 0 ? 0 : data.rows.reduce((n, r) => n + Number(r.p[0] !== r.y && r.p[i] === r.y), 0);
-      const lost = i === 0 ? 0 : data.rows.reduce((n, r) => n + Number(r.p[0] === r.y && r.p[i] !== r.y), 0);
-      return { alpha: a, index: i, correct, top5, rescued, lost, net: rescued - lost };
-    });
+    const map = new Map<number, string>();
+    for (const r of data.rows) map.set(r.trueLabel, r.trueClassName);
+    return Array.from(map.entries()).sort((a, b) => a[1].localeCompare(b[1]));
   }, [data]);
-
-  const selectedCounts = useMemo(() => {
-    if (!data) return { rescued: 0, lost: 0, majority: 0, unanimous: 0 };
-    let rescued = 0, lost = 0, majority = 0, unanimous = 0;
-    for (const row of data.rows) {
-      const status = getStatus(row, selectedIdx);
-      if (status.rescued) rescued += 1;
-      if (status.lost) lost += 1;
-      if (row.p[0] !== row.y && status.rescueCount >= 3) majority += 1;
-      if (row.p[0] !== row.y && status.rescueCount === data.meta.alphas.length - 1) unanimous += 1;
-    }
-    return { rescued, lost, majority, unanimous };
-  }, [data, selectedIdx]);
-
-  const byClass = useMemo(() => {
-    if (!data) return [];
-    const map = new Map<number, { id: number; n: number; rescued: number; lost: number; baseline: number }>();
-    for (const row of data.rows) {
-      const record = map.get(row.y) || { id: row.y, n: 0, rescued: 0, lost: 0, baseline: 0 };
-      const status = getStatus(row, selectedIdx);
-      record.n += 1;
-      record.rescued += Number(status.rescued);
-      record.lost += Number(status.lost);
-      record.baseline += Number(row.p[0] === row.y);
-      map.set(row.y, record);
-    }
-    return [...map.values()].map((v) => ({ ...v, net: v.rescued - v.lost })).sort((a, b) => b.net - a.net || b.rescued - a.rescued);
-  }, [data, selectedIdx]);
 
   const filtered = useMemo(() => {
     if (!data) return [];
-    const list = data.rows.filter((row) => {
-      if (thumbOnly && !row.thumb) return false;
-      if (classFilter !== null && row.y !== classFilter) return false;
-      if (deferredSearch && !row.id.toLowerCase().includes(deferredSearch) && !labelFor(data, row.y).toLowerCase().includes(deferredSearch) && !classId(row.y).includes(deferredSearch)) return false;
-      const s = getStatus(row, selectedIdx);
-      switch (outcome) {
-        case "rescued": return s.rescued;
-        case "lost": return s.lost;
-        case "majority": return row.p[0] !== row.y && s.rescueCount >= 3;
-        case "unanimous": return row.p[0] !== row.y && s.rescueCount === data.meta.alphas.length - 1;
-        case "rank-up": return s.rankUp;
-        case "rank-down": return s.rankDown;
-        case "both-correct": return s.bothCorrect;
-        case "both-wrong": return s.bothWrong;
-        default: return true;
-      }
+    const rows = data.rows.filter(r => {
+      if (status !== "Both" && r.kind !== status.toLowerCase()) return false;
+      if (trueClass !== "all" && r.trueLabel !== Number(trueClass)) return false;
+      if (search && ![r.filename, r.trueClassName, r.baselineClassName, r.hybridClassName,
+                        `${r.datasetIndex}`].some(x => x.toLowerCase().includes(search))) return false;
+      return true;
     });
-    if (sort !== "index") list.sort((a, b) => {
-      const i = getDisplayIndex(a, selectedIdx), j = getDisplayIndex(b, selectedIdx);
-      if (sort === "rank") return (b.r[0] - b.r[j]) - (a.r[0] - a.r[i]);
-      const gainA = a.q[i] - a.q[0], gainB = b.q[j] - b.q[0];
-      return sort === "drop" ? gainA - gainB : gainB - gainA;
-    });
-    return list;
-  }, [data, classFilter, deferredSearch, thumbOnly, selectedIdx, outcome, sort]);
+    if (sort === "Class") rows.sort((a, b) => a.trueClassName.localeCompare(b.trueClassName) || a.datasetIndex - b.datasetIndex);
+    else if (sort === "Random") rows.sort((a, b) => deterministicRandom(a.datasetIndex) - deterministicRandom(b.datasetIndex));
+    else if (sort.startsWith("Hybrid confidence")) {
+      rows.sort((a, b) => (a.confidence01 === null ? 1 : 0) - (b.confidence01 === null ? 1 : 0) ||
+        (sort.endsWith("high to low") ? (b.confidence01 ?? 0) - (a.confidence01 ?? 0) : (a.confidence01 ?? 0) - (b.confidence01 ?? 0)));
+    } else rows.sort((a, b) => a.datasetIndex - b.datasetIndex);
+    return rows;
+  }, [data, status, trueClass, search, sort]);
 
-  useEffect(() => { setPage(1); }, [alpha, outcome, sort, search, classFilter, thumbOnly]);
-  const maxPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const activePage = Math.min(page, maxPages);
-  const visible = filtered.slice((activePage - 1) * PAGE_SIZE, activePage * PAGE_SIZE);
-  const baseline = modelStats[0];
-  const hybrid = selectedIdx < 0 ? null : modelStats[selectedIdx];
-  const alphaSelectedLabel = selectedIdx < 0 ? "Any of the 5 hybrids" : `α = ${alphaText(Number(alpha))}`;
-  const datasetSize = data?.rows.length ?? 0;
+  const classRows = useMemo(() => {
+    const map = new Map<number, {id: number, name: string, rescued: number, regressed: number}>();
+    for (const r of data?.rows ?? []) {
+      let item = map.get(r.trueLabel);
+      if (!item) { item = {id: r.trueLabel, name: r.trueClassName, rescued: 0, regressed: 0}; map.set(r.trueLabel, item); }
+      item[r.kind] += 1;
+    }
+    return Array.from(map.values()).map(r => ({...r, net: r.rescued - r.regressed}))
+      .sort((a, b) => b.net - a.net || b.rescued - a.rescued);
+  }, [data]);
 
-  return <main className={styles.shell}>
-    <div className={styles.container}>
-      <nav className={styles.nav}><a href="/" className={styles.navBack}>← JEM research plots</a><span className={styles.navRight}>JEM / IMAGENET-1K / SEED 1</span></nav>
-      <header className={styles.header}>
-        <div className={styles.eyebrow}>REPRESENTATIONAL ANALYSIS / CLASSIFICATION BEHAVIOR</div>
-        <h1>Which images do hybrid <em>JEMs rescue?</em></h1>
-        <p>Compare a discriminative baseline (α = 0.0) with five hybrid objectives. Explore newly correct predictions, regressions, and category-level effects on identical ImageNet validation examples.</p>
-      </header>
+  const confusions = useMemo(() => {
+    const map = new Map<string, {kind: string, trueClass: string, wrongClass: string, count: number}>();
+    for (const r of data?.rows ?? []) {
+      const wrongClass = r.kind === "rescued" ? r.baselineClassName : r.hybridClassName;
+      const k = JSON.stringify([r.kind, r.trueClassName, wrongClass]);
+      const item = map.get(k) ?? {kind: r.kind, trueClass: r.trueClassName, wrongClass, count: 0};
+      item.count++;
+      map.set(k, item);
+    }
+    return [...map.values()].sort((a, b) => b.count - a.count);
+  }, [data]);
 
-      {loading && <div className={styles.notice}>Loading ImageNet prediction results…</div>}
-      {error && <div className={styles.notice} role="alert"><strong>No prediction export found.</strong><p>{error}</p><p>Run <code>scripts/export_jem_classification.py</code> on OSCAR and copy <code>results.json</code> into <code>public/jem-analysis/</code>. The site does not run your PyTorch checkpoints.</p></div>}
+  useEffect(() => { setPage(1); }, [status, trueClass, query, sort, pageSize]);
+  const nPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const activePage = Math.min(page, nPages);
+  const pageRows = filtered.slice((activePage - 1) * pageSize, activePage * pageSize);
+  const rescued = data?.meta.nRescued ?? 0;
+  const regressed = data?.meta.nRegressed ?? 0;
+  const maxCount = Math.max(1, ...classRows.slice(0, 30).map(x => Math.max(x.rescued, x.regressed)));
+
+  return <div className={styles.site}>
+    <aside className={styles.sidebar}>
+      <a className={styles.back} href="/">← Research homepage</a>
+      <div className={styles.sidebarTitle}>JEM rescue explorer</div>
+      <div className={styles.sideDivider} />
+      <div className={styles.sideHeading}>Data source</div>
+      <div className={styles.fixedField}><span>Baseline model</span><strong>α = 0.0</strong></div>
+      <div className={styles.fixedField}><span>Hybrid model</span><strong>α = 0.1</strong></div>
+      <div className={styles.fixedField}><span>Seed</span><strong>1</strong></div>
+      <div className={styles.fixedField}><span>Image view</span><strong>Evaluation crop only</strong></div>
+      <div className={styles.sideDivider} />
+      <div className={styles.sideHeading}>Gallery filters</div>
+      <label className={styles.fieldLabel}>Status</label>
+      <div className={styles.statusOptions}>
+        {(["Both", "Rescued", "Regressed"] as Status[]).map(s =>
+          <button type="button" key={s} className={`${styles.statusButton} ${status === s ? styles.selected : ""}`} onClick={() => setStatus(s)}>{s}</button>
+        )}
+      </div>
+      <label className={styles.fieldLabel} htmlFor="true-class">True class</label>
+      <select id="true-class" className={styles.control} value={trueClass} onChange={e => setTrueClass(e.target.value)}>
+        <option value="all">All classes</option>
+        {classes.map(([id, name]) => <option value={id} key={id}>{numeric(id)} — {name}</option>)}
+      </select>
+      <label className={styles.fieldLabel} htmlFor="search">Search prediction or filename</label>
+      <input id="search" className={styles.control} placeholder="e.g. leopard or ILSVRC..." value={query} onChange={e => setQuery(e.target.value)} />
+      <label className={styles.fieldLabel} htmlFor="sort">Sort</label>
+      <select id="sort" className={styles.control} value={sort} onChange={e => setSort(e.target.value as Sort)}>
+        {(["ImageNet order", "Class", "Random", "Hybrid confidence high to low", "Hybrid confidence low to high"] as Sort[])
+          .map(s => <option value={s} key={s}>{s}</option>)}
+      </select>
+      <label className={styles.fieldLabel} htmlFor="page-size">Images per page</label>
+      <select id="page-size" className={styles.control} value={pageSize} onChange={e => setPageSize(Number(e.target.value))}>
+        {[12,24,36,48].map(s => <option key={s} value={s}>{s}</option>)}
+      </select>
+      <div className={styles.sideNote}>This page uses precomputed predictions and evaluation crops. No model inference runs on Vercel.</div>
+    </aside>
+
+    <main className={styles.main}>
+      <h1>🔬 JEM rescued vs. regressed images</h1>
+      <p className={styles.subtitle}>Rescued: hybrid α=0.1 correct / baseline α=0 wrong. Regressed: baseline correct / hybrid wrong. Images are 224 × 224 evaluation crops.</p>
+      {error && <section className={styles.error}><strong>Unable to load Streamlit data</strong><p>{error}</p><p>Upload the generated <code>results.json</code> and <code>crops/</code> to <code>public/jem-analysis/</code>.</p></section>}
+      {!data && !error && <div className={styles.loading}>Loading saved predictions…</div>}
       {data && <>
-        <div className={styles.metadata}><span className={styles.liveDot}/> {fmt(datasetSize)} validation images <span>·</span> {data.meta.alphas.length} models <span>·</span> Seed {data.meta.seed} <span>·</span> {fmt(data.meta.thumbnailCount)} exported thumbnails</div>
-        <section className={styles.panel} aria-label="Model performance comparison">
-          <div className={styles.sectionTop}><div><span className={styles.sectionKicker}>01 / MODEL PERFORMANCE</span><h2>Classification across α</h2></div><span className={styles.sectionHint}>Correct predictions / {fmt(datasetSize)}</span></div>
-          <div className={styles.performanceGrid}>
-            <div className={styles.chartPanel}>
-              <div className={styles.smallTitle}>Top-1 accuracy by objective weight</div>
-              <div className={styles.barList}>
-                {modelStats.map((m) => <button key={m.alpha} className={`${styles.barRow} ${(selectedIdx === m.index || (m.index === 0 && selectedIdx === -1)) ? styles.barRowActive : ""}`} onClick={() => { if (m.index > 0) setAlpha(alphaText(m.alpha)); }} title={m.index === 0 ? "Baseline" : `Inspect alpha ${m.alpha}`}>
-                  <span className={styles.barLabel}>α={alphaText(m.alpha)}</span>
-                  <span className={styles.barTrack}><span className={`${styles.barFill} ${m.index === 0 ? styles.baselineFill : ""}`} style={{ width: `${(m.correct / datasetSize) * 100}%` }} /></span>
-                  <span className={styles.barValue}>{pct(m.correct, datasetSize)}</span>
-                </button>)}
+        <div className={styles.metrics}>
+          <div className={styles.metric}><span>Rescued</span><strong>{number(rescued)}</strong></div>
+          <div className={styles.metric}><span>Regressed</span><strong>{number(regressed)}</strong></div>
+          <div className={styles.metric}><span>Net gain</span><strong>{rescued-regressed >= 0 ? "+" : ""}{number(rescued-regressed)}</strong></div>
+          <div className={styles.metric}><span>Hybrid alpha</span><strong>0.1</strong></div>
+        </div>
+        <div className={styles.metadata}>{number(data.meta.nEvaluated)} evaluation images • {number(data.rows.length)} changed in correctness • {number(data.meta.nCrops)} available crops</div>
+        <div className={styles.tabs} role="tablist" aria-label="Results">
+          {(["Gallery", "Class counts", "Confusions"] as Tab[]).map(t =>
+            <button type="button" key={t} role="tab" aria-selected={tab === t} onClick={() => setTab(t)} className={tab === t ? styles.activeTab : ""}>
+              {t === "Gallery" ? "🖼️ " : t === "Class counts" ? "📊 " : "🧩 "}{t}
+            </button>
+          )}
+        </div>
+        {tab === "Gallery" && <section>
+          <div className={styles.tabTitle}><h2>{number(filtered.length)} matching images</h2>
+            <button className={styles.download} onClick={() => downloadCsv("matching_examples.csv", filtered as unknown as Record<string, string | number | null>[])}>Download matching CSV</button>
+          </div>
+          <div className={styles.pager}>
+            <button type="button" disabled={activePage <= 1} onClick={() => setPage(p => Math.max(1, p - 1))}>Previous</button>
+            <span>Page {activePage} of {nPages}</span>
+            <button type="button" disabled={activePage >= nPages} onClick={() => setPage(p => Math.min(nPages, p + 1))}>Next</button>
+          </div>
+          <div className={styles.gallery}>
+            {pageRows.map(r => <article className={styles.imageCard} key={r.datasetIndex}>
+              <div className={r.kind === "rescued" ? styles.rescuedTag : styles.regressedTag}>{r.kind === "rescued" ? "✅ Rescued" : "❌ Regressed"}</div>
+              {r.crop ? <img src={`/jem-analysis/${r.crop}`} alt={`${r.trueClassName} validation image`} width={224} height={224} loading="lazy" className={styles.photo} />
+                : <div className={styles.noPhoto}>Evaluation crop not uploaded</div>}
+              <div className={styles.imageDetails}>
+                <strong>True: {r.trueClassName} (#{r.trueLabel})</strong>
+                <p>α=0.0: {r.baselineClassName}{confidence(r.confidence0)}</p>
+                <p>α=0.1: {r.hybridClassName}{confidence(r.confidence01)}</p>
+                <small title={r.filename}>{r.filename}</small>
               </div>
+            </article>)}
+          </div>
+          {filtered.length === 0 && <p>No examples match these filters.</p>}
+          <div className={styles.pager}>
+            <button type="button" disabled={activePage <= 1} onClick={() => setPage(p => Math.max(1, p - 1))}>Previous</button>
+            <span>Page {activePage} of {nPages}</span>
+            <button type="button" disabled={activePage >= nPages} onClick={() => setPage(p => Math.min(nPages, p + 1))}>Next</button>
+          </div>
+        </section>}
+        {tab === "Class counts" && <section>
+          <div className={styles.tabTitle}><h2>Class rescue minus regression counts</h2>
+            <button className={styles.download} onClick={() => downloadCsv("class_counts.csv", classRows as unknown as Record<string, string | number | null>[])}>Download class counts</button>
+          </div>
+          <p className={styles.subtitle}>Classes with the largest positive and negative rescue–regression balance.</p>
+          <div className={styles.legend}><span className={styles.rescueSquare} /> Rescued <span className={styles.regressionSquare} /> Regressed</div>
+          <div className={styles.barChart}>{classRows.slice(0, 30).map(r =>
+            <div className={styles.barGroup} key={r.id}>
+              <span title={r.name}>{r.name}</span>
+              <div className={styles.barTracks}>
+                <div className={styles.rescueBar} style={{width: `${100 * r.rescued / maxCount}%`}} title={`${r.rescued} rescued`} />
+                <div className={styles.regressionBar} style={{width: `${100 * r.regressed / maxCount}%`}} title={`${r.regressed} regressed`} />
+              </div><b>{r.net >= 0 ? "+" : ""}{r.net}</b>
             </div>
-            <div className={styles.chartPanel}>
-              <div className={styles.smallTitle}>Rescues versus losses <span className={styles.muted}>(relative to α=0)</span></div>
-              <div className={styles.tradeoffList}>
-                {modelStats.slice(1).map((m) => <button key={m.alpha} className={styles.tradeoffRow} onClick={() => setAlpha(alphaText(m.alpha))}>
-                  <span className={styles.barLabel}>α={alphaText(m.alpha)}</span>
-                  <span className={styles.tradeoffTrack}>
-                    <span className={styles.rescueFill} style={{ width: `${100 * m.rescued / Math.max(1, ...modelStats.map((x) => x.rescued + x.lost)) }%` }}/>
-                    <span className={styles.lossFill} style={{ width: `${100 * m.lost / Math.max(1, ...modelStats.map((x) => x.rescued + x.lost)) }%` }}/>
-                  </span>
-                  <span className={`${styles.netValue} ${m.net >= 0 ? styles.good : styles.bad}`}>{m.net >= 0 ? "+" : ""}{fmt(m.net)}</span>
-                </button>)}
-              </div>
-              <div className={styles.chartLegend}><span><i className={styles.legendGood}/> Rescued</span><span><i className={styles.legendBad}/> Lost</span><span>Right: net change</span></div>
-            </div>
+          )}</div>
+          <div className={styles.tableScroll}><table><thead><tr><th>Class ID</th><th>True class</th><th>Rescued</th><th>Regressed</th><th>Net gain</th></tr></thead>
+          <tbody>{classRows.map(r => <tr key={r.id}><td>{r.id}</td><td>{r.name}</td><td>{r.rescued}</td><td>{r.regressed}</td><td>{r.net > 0 ? `+${r.net}` : r.net}</td></tr>)}</tbody></table></div>
+        </section>}
+        {tab === "Confusions" && <section>
+          <div className={styles.tabTitle}><h2>Incorrect predictions on changed examples</h2>
+            <button className={styles.download} onClick={() => downloadCsv("confusions.csv", confusions.slice(0, 200) as unknown as Record<string, string | number | null>[])}>Download confusion CSV</button>
           </div>
-        </section>
-
-        <section className={styles.statsRow} aria-label="Selected comparison metrics">
-          <Stat label="BASELINE TOP-1" value={pct(baseline?.correct ?? 0, datasetSize)} detail={`α=0.0 · Top-5 ${pct(baseline?.top5 ?? 0, datasetSize)}`} />
-          <Stat label={selectedIdx < 0 ? "ANY HYBRID RESCUES" : "HYBRID TOP-1"} value={selectedIdx < 0 ? fmt(selectedCounts.rescued) : pct(hybrid?.correct ?? 0, datasetSize)} detail={selectedIdx < 0 ? "Baseline errors fixed by ≥1 hybrid" : `${alphaSelectedLabel} · Top-5 ${pct(hybrid?.top5 ?? 0, datasetSize)}`} />
-          <Stat label="NEWLY CORRECT" value={`+${fmt(selectedCounts.rescued)}`} detail="Baseline wrong → hybrid correct" variant="good" />
-          <Stat label="REGRESSIONS" value={`−${fmt(selectedCounts.lost)}`} detail={selectedIdx < 0 ? "Baseline correct → ≥1 hybrid wrong" : "Baseline correct → hybrid wrong"} variant="bad" />
-          <Stat label={selectedIdx < 0 ? "ALL FIVE RESCUE" : "NET CLASSIFICATIONS"} value={selectedIdx < 0 ? fmt(selectedCounts.unanimous) : `${selectedCounts.rescued - selectedCounts.lost >= 0 ? "+" : ""}${fmt(selectedCounts.rescued - selectedCounts.lost)}`} detail={selectedIdx < 0 ? `${fmt(selectedCounts.majority)} rescued by ≥3 hybrids` : "Rescued − lost"} variant={selectedIdx < 0 || selectedCounts.rescued >= selectedCounts.lost ? "good" : "bad"}/>
-        </section>
-
-        <section id="top" className={styles.panel} aria-label="Image explorer">
-          <div className={styles.sectionTop}><div><span className={styles.sectionKicker}>02 / IMAGE-LEVEL EXPLORER</span><h2>Inspect individual predictions</h2></div><span className={styles.sectionHint}>{fmt(filtered.length)} matching examples</span></div>
-          <div className={styles.filters}>
-            <label className={styles.field}><span>Compared model</span><select value={alpha} onChange={(e) => setAlpha(e.target.value)}><option value="any">Any hybrid (union)</option>{data.meta.alphas.slice(1).map((a) => <option key={a} value={alphaText(a)}>α = {alphaText(a)}</option>)}</select></label>
-            <label className={styles.field}><span>Outcome</span><select value={outcome} onChange={(e) => setOutcome(e.target.value as Outcome)}><option value="rescued">Rescued (baseline wrong)</option><option value="lost">Lost (baseline correct)</option><option value="majority">Rescued by 3+ hybrids</option><option value="unanimous">Rescued by all 5</option><option value="rank-up">Ground-truth rank improved</option><option value="rank-down">Ground-truth rank worsened</option><option value="both-correct">Both correct</option><option value="both-wrong">Both wrong</option><option value="any">All images</option></select></label>
-            <label className={styles.field}><span>Sort by</span><select value={sort} onChange={(e) => setSort(e.target.value as Ordering)}><option value="gain">Largest true-class probability gain</option><option value="drop">Largest true-class probability drop</option><option value="rank">Largest rank improvement</option><option value="index">Dataset order</option></select></label>
-            <label className={styles.field}><span>Image or class search</span><input type="search" placeholder="e.g. tabby, 281, val_0001" value={search} onChange={(e) => setSearch(e.target.value)} /></label>
-          </div>
-          <div className={styles.filterFooter}>
-            <label className={styles.checkbox}><input type="checkbox" checked={thumbOnly} onChange={(e) => setThumbOnly(e.target.checked)} /> Only show images with exported thumbnails</label>
-            {classFilter !== null && <button className={styles.clearTag} onClick={() => setClassFilter(null)}>Class: {labelFor(data, classFilter)} ×</button>}
-          </div>
-          <div className={styles.imageGrid}>
-            {visible.map((row) => {
-              const h = getDisplayIndex(row, selectedIdx);
-              const originalCorrect = row.p[0] === row.y;
-              const hybridCorrect = row.p[h] === row.y;
-              const delta = row.q[h] - row.q[0];
-              return <article className={styles.imageCard} key={row.id}>
-                <div className={styles.imageFrame}>
-                  {row.thumb ? <Image src={`/jem-analysis/${row.thumb}`} alt={`ImageNet image ${row.id}: ${labelFor(data, row.y)}`} fill sizes="(max-width: 640px) 90vw, (max-width: 1050px) 45vw, 22vw" unoptimized className={styles.image} /> : <div className={styles.noImage}><span>Image not exported</span><small>Class ID {row.y}</small></div>}
-                  <span className={`${styles.imageStatus} ${!originalCorrect && hybridCorrect ? styles.rescueChip : originalCorrect && !hybridCorrect ? styles.lossChip : styles.neutralChip}`}>{!originalCorrect && hybridCorrect ? "RESCUED" : originalCorrect && !hybridCorrect ? "LOST" : hybridCorrect ? "CORRECT" : "INCORRECT"}</span>
-                </div>
-                <div className={styles.cardBody}>
-                  <div className={styles.cardId} title={row.id}>{row.id}</div>
-                  <div className={styles.groundTruth}>GT: <strong>{labelFor(data, row.y)}</strong></div>
-                  <div className={styles.predictionRow}><span>α = 0.0</span><strong className={originalCorrect ? styles.good : styles.bad}>{labelFor(data, row.p[0])}</strong></div>
-                  <div className={styles.predictionRow}><span>α = {alphaText(data.meta.alphas[h])}</span><strong className={hybridCorrect ? styles.good : styles.bad}>{labelFor(data, row.p[h])}</strong></div>
-                  <div className={styles.cardFooter}><span>GT rank {row.r[0]} → {row.r[h]}</span><span className={delta >= 0 ? styles.good : styles.bad}>{delta >= 0 ? "+" : ""}{(100 * delta).toFixed(1)} pp GT prob.</span></div>
-                </div>
-              </article>;
-            })}
-          </div>
-          {filtered.length === 0 && <div className={styles.empty}>No images match these filters. Try unchecking the thumbnail restriction or choosing another outcome.</div>}
-          <div className={styles.pagination}><span>Showing {filtered.length ? fmt((activePage - 1) * PAGE_SIZE + 1) : 0}–{fmt(Math.min(activePage * PAGE_SIZE, filtered.length))} of {fmt(filtered.length)}</span><div><button disabled={activePage <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>Previous</button><span>Page {activePage} / {maxPages}</span><button disabled={activePage >= maxPages} onClick={() => setPage((p) => Math.min(maxPages, p + 1))}>Next</button></div></div>
-        </section>
-
-        <section className={styles.panel} aria-label="ImageNet class breakdown">
-          <div className={styles.sectionTop}><div><span className={styles.sectionKicker}>03 / CLASS-LEVEL ANALYSIS</span><h2>Where do hybrids help?</h2></div><span className={styles.sectionHint}>Click a class to inspect its images</span></div>
-          <div className={styles.classTableScroll}><table className={styles.classTable}><thead><tr><th>ImageNet class</th><th>Images</th><th>Rescued</th><th>Lost</th><th>Net gain</th></tr></thead><tbody>{byClass.slice(0, 30).map((item) => <tr key={item.id} onClick={() => { setClassFilter(item.id); setOutcome("rescued"); document.getElementById("top")?.scrollIntoView({ behavior: "smooth" }); }}><td><span className={styles.classNumber}>{classId(item.id)}</span> {labelFor(data, item.id)}</td><td>{item.n}</td><td className={styles.good}>+{item.rescued}</td><td className={styles.bad}>−{item.lost}</td><td className={item.net >= 0 ? styles.good : styles.bad}>{item.net > 0 ? "+" : ""}{item.net}</td></tr>)}</tbody></table></div>
-        </section>
-        <div className={styles.footnote}>Definitions: <strong>rescued</strong> = α=0 wrong, hybrid correct; <strong>lost</strong> = α=0 correct, hybrid wrong. In “any hybrid” mode, rescues and losses are set unions and must not be interpreted as one model’s net gain. Ground-truth probability refers to the softmax probability of the labeled class; it is not a calibrated confidence measure. ImageNet images may have redistribution restrictions—publish thumbnails only when authorized.</div>
+          <div className={styles.tableScroll}><table><thead><tr><th>Outcome</th><th>True class</th><th>Wrong prediction</th><th>Count</th></tr></thead>
+          <tbody>{confusions.slice(0, 200).map((r,i) => <tr key={i}><td>{r.kind}</td><td>{r.trueClass}</td><td>{r.wrongClass}</td><td>{r.count}</td></tr>)}</tbody></table></div>
+        </section>}
+        <details className={styles.diagnostics}><summary>🔧 Diagnostics</summary>
+          <p>Source: {data.meta.source}</p><p>Changed correctness rows: {data.rows.length}</p>
+          <p>Image crops supplied: {data.meta.nCrops} of {data.rows.length}</p>
+        </details>
       </>}
-    </div>
-  </main>;
+    </main>
+  </div>;
 }

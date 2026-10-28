@@ -1,4 +1,1 @@
-This folder holds data exported from OSCAR by scripts/export_jem_classification.py.
-
-Expected output: results.json (plus optional, authorized thumbs/). No model weights,
-raw training datasets, or Python packages should be deployed to Vercel.
+Put generated `results.json` and `crops/` here. Generate them on OSCAR using `scripts/pack_existing_streamlit_data.py` with the existing `hybrid_rescue_seed1` Streamlit CSV and evaluation crops. Do not upload original ImageNet images without appropriate rights.

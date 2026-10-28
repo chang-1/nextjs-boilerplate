@@ -1,12 +1,10 @@
-import type { Metadata } from "next";
 import Explorer from "./Explorer";
 
-export const metadata: Metadata = {
-  title: "JEM | ImageNet Hybrid Rescue Explorer",
-  description:
-    "Explore ImageNet validation examples rescued or lost by hybrid JEM objectives compared with alpha 0.",
+export const metadata = {
+  title: "JEM Rescued vs. Regressed Images",
+  description: "α=0.0 vs α=0.1: ImageNet evaluation crops and classifications",
 };
 
-export default function JemRescuesPage() {
+export default function Page() {
   return <Explorer />;
 }
