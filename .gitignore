@@ -39,3 +39,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# JEM datasets and rendered maps are hosted in Cloudflare R2.
+/public/jem-analysis/

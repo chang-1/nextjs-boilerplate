@@ -1,8 +1,8 @@
 import Explorer from "./Explorer";
 
 export const metadata = {
-  title: "JEM Rescued vs. Regressed Images",
-  description: "α=0.0 vs α=0.1: ImageNet evaluation crops and classifications",
+  title: "JEM Predictions & Jacobians",
+  description: "α=0.0 vs α=0.1: ImageNet predictions, confidence, and decoder-Jacobian comparisons",
 };
 
 export default function Page() {

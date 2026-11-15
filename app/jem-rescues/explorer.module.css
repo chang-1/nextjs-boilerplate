@@ -66,3 +66,29 @@
 @media (max-width: 1250px) { .gallery { grid-template-columns: repeat(3, minmax(0, 1fr)); } .main { padding: 32px 24px; } }
 @media (max-width: 900px) { .site { display: block; } .sidebar { position: static; height: auto; } .gallery { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 600px) { .metrics { grid-template-columns: repeat(2, 1fr); } .gallery { grid-template-columns: 1fr 1fr; gap: 9px; } .main { padding: 22px 12px; } .main h1 { font-size: 24px; } .tabTitle { flex-wrap: wrap; } .imageDetails { font-size: 11px; } .barGroup { grid-template-columns: 100px 1fr 25px; } }
+.statusOptions { flex-wrap: wrap; }
+.statusOptions button { flex: 1 1 45%; }
+.neutralTag { color: #59697b; font-size: 13px; font-weight: 700; padding: 12px 12px 10px; }
+.imageDetails button { margin-top: 12px; width: 100%; }
+.modal { position: fixed; inset: 0; margin: auto; width: min(1280px, 95vw); max-height: 92vh; overflow: auto; padding: 24px; border: 1px solid #dce2eb; border-radius: 12px; background: white; color: #17212e; }
+.modal::backdrop { background: rgb(16 28 45 / 65%); }
+.modalHeader { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; }
+.modalHeader h2 { margin: 0; font-size: 21px; }
+.modalHeader p { font-size: 12px; color: #647184; overflow-wrap: anywhere; margin-top: 8px; }
+.targetControls { display: flex; gap: 10px; max-width: 560px; margin: 20px 0; }
+.targetControls button { padding: 10px; }
+.targetControls button:disabled { opacity: .5; cursor: not-allowed; }
+.mapGrid { display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); gap: 12px; }
+.mapFigure { margin: 0; min-width: 0; }
+.mapFigure figcaption { font-size: 12px; font-weight: 700; margin-bottom: 9px; }
+.mapFigure img { width: 100%; height: auto; border-radius: 6px; }
+.mapStats { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; margin: 24px 0; }
+.mapStats div { border: 1px solid #e0e6ef; border-radius: 8px; padding: 12px; }
+.mapStats dt { font-size: 12px; color: #647184; }
+.mapStats dd { margin: 8px 0 0; font-size: 20px; font-variant-numeric: tabular-nums; }
+.mapExplanation { font-size: 13px; line-height: 1.6; color: #59697b; }
+.mapExplanation p { margin: 10px 0; }
+.negative { color: #2166ac; } .positive { color: #b2182b; }
+.site button:focus-visible, .modal button:focus-visible, .modal a:focus-visible { outline: 3px solid #6799ee; outline-offset: 3px; }
+@media(max-width: 900px) { .mapGrid { grid-template-columns: repeat(2,minmax(0,1fr)); } .mapStats { grid-template-columns: repeat(2,1fr); } }
+@media(max-width: 600px) { .modal { padding: 16px; } .modalHeader h2 { font-size: 18px; } .tabs { gap: 0; } .tabs button { padding: 12px 9px; } }
