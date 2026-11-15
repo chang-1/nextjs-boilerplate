@@ -3,38 +3,11 @@
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import styles from "./explorer.module.css";
 
-type Kind = "rescued" | "regressed";
-type ImageRow = {
-  datasetIndex: number;
-  filename: string;
-  kind: Kind;
-  trueLabel: number;
-  trueClassName: string;
-  baselinePred: number;
-  baselineClassName: string;
-  hybridPred: number;
-  hybridClassName: string;
-  confidence0: number | null;
-  confidence01: number | null;
-  crop: string | null;
-};
-type RescueData = {
-  schemaVersion: 2;
-  meta: {
-    dataset: string;
-    seed: number;
-    baselineAlpha: number;
-    hybridAlpha: number;
-    nEvaluated: number;
-    nChanged: number;
-    nRescued: number;
-    nRegressed: number;
-    nCrops: number;
-    source: string;
-  };
-  rows: ImageRow[];
-};
-type Status = "Both" | "Rescued" | "Regressed";
+import { loadCatalog, type ImageRow, type RescueData, type Kind } from "./data";
+import JacobianPanel from "./JacobianPanel";
+type Status = "Changed correctness" | "All images" | "Rescued" | "Regressed" | "Both correct" | "Both wrong";
+const statuses: Status[] = ["Changed correctness", "All images", "Rescued", "Regressed", "Both correct", "Both wrong"];
+const kindLabels: Record<Kind, string> = { rescued: "Rescued", regressed: "Regressed", both_correct: "Both correct", both_wrong: "Both wrong" };
 type Tab = "Gallery" | "Class counts" | "Confusions";
 type Sort = "ImageNet order" | "Class" | "Random" | "Hybrid confidence high to low" | "Hybrid confidence low to high";
 const number = (n: number) => n.toLocaleString("en-US");
@@ -57,8 +30,9 @@ function downloadCsv(name: string, rows: Record<string, string | number | null>[
 
 export default function Explorer() {
   const [data, setData] = useState<RescueData | null>(null);
+  const [selected, setSelected] = useState<ImageRow | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [status, setStatus] = useState<Status>("Both");
+  const [status, setStatus] = useState<Status>("Changed correctness");
   const [trueClass, setTrueClass] = useState<string>("all");
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<Sort>("ImageNet order");
@@ -69,18 +43,8 @@ export default function Explorer() {
 
   useEffect(() => {
     let valid = true;
-    fetch("/jem-analysis/results.json")
-      .then(async response => {
-        if (!response.ok) throw new Error(`Could not load /jem-analysis/results.json (HTTP ${response.status})`);
-        return response.json() as Promise<RescueData>;
-      })
-      .then(json => {
-        if (json.schemaVersion !== 2 || json.meta?.baselineAlpha !== 0 ||
-            json.meta.hybridAlpha !== 0.1 || !Array.isArray(json.rows)) {
-          throw new Error("Incompatible data. Use pack_existing_streamlit_data.py on your existing Streamlit CSV.");
-        }
-        if (valid) setData(json);
-      })
+    loadCatalog()
+      .then(json => { if (valid) setData(json); })
       .catch(e => { if (valid) setError(e instanceof Error ? e.message : String(e)); });
     return () => { valid = false; };
   }, []);
@@ -95,7 +59,8 @@ export default function Explorer() {
   const filtered = useMemo(() => {
     if (!data) return [];
     const rows = data.rows.filter(r => {
-      if (status !== "Both" && r.kind !== status.toLowerCase()) return false;
+      if (status === "Changed correctness" && r.kind !== "rescued" && r.kind !== "regressed") return false;
+      if (status !== "Changed correctness" && status !== "All images" && kindLabels[r.kind] !== status) return false;
       if (trueClass !== "all" && r.trueLabel !== Number(trueClass)) return false;
       if (search && ![r.filename, r.trueClassName, r.baselineClassName, r.hybridClassName,
                         `${r.datasetIndex}`].some(x => x.toLowerCase().includes(search))) return false;
@@ -115,7 +80,7 @@ export default function Explorer() {
     for (const r of data?.rows ?? []) {
       let item = map.get(r.trueLabel);
       if (!item) { item = {id: r.trueLabel, name: r.trueClassName, rescued: 0, regressed: 0}; map.set(r.trueLabel, item); }
-      item[r.kind] += 1;
+      if (r.kind === "rescued" || r.kind === "regressed") item[r.kind] += 1;
     }
     return Array.from(map.values()).map(r => ({...r, net: r.rescued - r.regressed}))
       .sort((a, b) => b.net - a.net || b.rescued - a.rescued);
@@ -124,6 +89,7 @@ export default function Explorer() {
   const confusions = useMemo(() => {
     const map = new Map<string, {kind: string, trueClass: string, wrongClass: string, count: number}>();
     for (const r of data?.rows ?? []) {
+      if (r.kind !== "rescued" && r.kind !== "regressed") continue;
       const wrongClass = r.kind === "rescued" ? r.baselineClassName : r.hybridClassName;
       const k = JSON.stringify([r.kind, r.trueClassName, wrongClass]);
       const item = map.get(k) ?? {kind: r.kind, trueClass: r.trueClassName, wrongClass, count: 0};
@@ -144,18 +110,18 @@ export default function Explorer() {
   return <div className={styles.site}>
     <aside className={styles.sidebar}>
       <a className={styles.back} href="/">← Research homepage</a>
-      <div className={styles.sidebarTitle}>JEM rescue explorer</div>
+      <div className={styles.sidebarTitle}>JEM image explorer</div>
       <div className={styles.sideDivider} />
       <div className={styles.sideHeading}>Data source</div>
       <div className={styles.fixedField}><span>Baseline model</span><strong>α = 0.0</strong></div>
       <div className={styles.fixedField}><span>Hybrid model</span><strong>α = 0.1</strong></div>
       <div className={styles.fixedField}><span>Seed</span><strong>1</strong></div>
-      <div className={styles.fixedField}><span>Image view</span><strong>Evaluation crop only</strong></div>
+      <div className={styles.fixedField}><span>Image view</span><strong>Crops + Jacobians</strong></div>
       <div className={styles.sideDivider} />
       <div className={styles.sideHeading}>Gallery filters</div>
       <label className={styles.fieldLabel}>Status</label>
       <div className={styles.statusOptions}>
-        {(["Both", "Rescued", "Regressed"] as Status[]).map(s =>
+        {statuses.map(s =>
           <button type="button" key={s} className={`${styles.statusButton} ${status === s ? styles.selected : ""}`} onClick={() => setStatus(s)}>{s}</button>
         )}
       </div>
@@ -175,13 +141,13 @@ export default function Explorer() {
       <select id="page-size" className={styles.control} value={pageSize} onChange={e => setPageSize(Number(e.target.value))}>
         {[12,24,36,48].map(s => <option key={s} value={s}>{s}</option>)}
       </select>
-      <div className={styles.sideNote}>This page uses precomputed predictions and evaluation crops. No model inference runs on Vercel.</div>
+      <div className={styles.sideNote}>Confidence is the model’s softmax probability for its predicted class, not a guarantee of correctness. Maps are precomputed; no model inference runs here.</div>
     </aside>
 
     <main className={styles.main}>
-      <h1>🔬 JEM rescued vs. regressed images</h1>
+      <h1>🔬 JEM predictions & Jacobians</h1>
       <p className={styles.subtitle}>Rescued: hybrid α=0.1 correct / baseline α=0 wrong. Regressed: baseline correct / hybrid wrong. Images are 224 × 224 evaluation crops.</p>
-      {error && <section className={styles.error}><strong>Unable to load Streamlit data</strong><p>{error}</p><p>Upload the generated <code>results.json</code> and <code>crops/</code> to <code>public/jem-analysis/</code>.</p></section>}
+      {error && <section className={styles.error}><strong>Unable to load analysis data</strong><p>{error}</p><p>Please reload to retry.</p></section>}
       {!data && !error && <div className={styles.loading}>Loading saved predictions…</div>}
       {data && <>
         <div className={styles.metrics}>
@@ -190,7 +156,7 @@ export default function Explorer() {
           <div className={styles.metric}><span>Net gain</span><strong>{rescued-regressed >= 0 ? "+" : ""}{number(rescued-regressed)}</strong></div>
           <div className={styles.metric}><span>Hybrid alpha</span><strong>0.1</strong></div>
         </div>
-        <div className={styles.metadata}>{number(data.meta.nEvaluated)} evaluation images • {number(data.rows.length)} changed in correctness • {number(data.meta.nCrops)} available crops</div>
+        <div className={styles.metadata}>{number(data.meta.nEvaluated)} evaluation images • {number(rescued + regressed)} changed in correctness • {number(data.meta.nCrops)} available crops</div>
         <div className={styles.tabs} role="tablist" aria-label="Results">
           {(["Gallery", "Class counts", "Confusions"] as Tab[]).map(t =>
             <button type="button" key={t} role="tab" aria-selected={tab === t} onClick={() => setTab(t)} className={tab === t ? styles.activeTab : ""}>
@@ -209,14 +175,15 @@ export default function Explorer() {
           </div>
           <div className={styles.gallery}>
             {pageRows.map(r => <article className={styles.imageCard} key={r.datasetIndex}>
-              <div className={r.kind === "rescued" ? styles.rescuedTag : styles.regressedTag}>{r.kind === "rescued" ? "✅ Rescued" : "❌ Regressed"}</div>
-              {r.crop ? <img src={`/jem-analysis/${r.crop}`} alt={`${r.trueClassName} validation image`} width={224} height={224} loading="lazy" className={styles.photo} />
+              <div className={r.kind === "rescued" ? styles.rescuedTag : r.kind === "regressed" ? styles.regressedTag : styles.neutralTag}>{kindLabels[r.kind]}</div>
+              {r.crop ? <img src={new URL(r.crop, data.assetBaseUrl).href} alt={`${r.trueClassName} validation image`} width={224} height={224} loading="lazy" className={styles.photo} />
                 : <div className={styles.noPhoto}>Evaluation crop not uploaded</div>}
               <div className={styles.imageDetails}>
                 <strong>True: {r.trueClassName} (#{r.trueLabel})</strong>
                 <p>α=0.0: {r.baselineClassName}{confidence(r.confidence0)}</p>
                 <p>α=0.1: {r.hybridClassName}{confidence(r.confidence01)}</p>
                 <small title={r.filename}>{r.filename}</small>
+                <button className={styles.download} onClick={() => setSelected(r)}>View Jacobians</button>
               </div>
             </article>)}
           </div>
@@ -231,7 +198,7 @@ export default function Explorer() {
           <div className={styles.tabTitle}><h2>Class rescue minus regression counts</h2>
             <button className={styles.download} onClick={() => downloadCsv("class_counts.csv", classRows as unknown as Record<string, string | number | null>[])}>Download class counts</button>
           </div>
-          <p className={styles.subtitle}>Classes with the largest positive and negative rescue–regression balance.</p>
+          <p className={styles.subtitle}>Top 30 classes by rescue–regression balance. The table includes all classes.</p>
           <div className={styles.legend}><span className={styles.rescueSquare} /> Rescued <span className={styles.regressionSquare} /> Regressed</div>
           <div className={styles.barChart}>{classRows.slice(0, 30).map(r =>
             <div className={styles.barGroup} key={r.id}>
@@ -253,9 +220,10 @@ export default function Explorer() {
           <tbody>{confusions.slice(0, 200).map((r,i) => <tr key={i}><td>{r.kind}</td><td>{r.trueClass}</td><td>{r.wrongClass}</td><td>{r.count}</td></tr>)}</tbody></table></div>
         </section>}
         <details className={styles.diagnostics}><summary>🔧 Diagnostics</summary>
-          <p>Source: {data.meta.source}</p><p>Changed correctness rows: {data.rows.length}</p>
+          <p>Source: {data.meta.source}</p><p>Changed correctness rows: {rescued + regressed}</p>
           <p>Image crops supplied: {data.meta.nCrops} of {data.rows.length}</p>
         </details>
+        {selected && <JacobianPanel key={selected.datasetIndex} row={selected} data={data} onClose={() => setSelected(null)} />}
       </>}
     </main>
   </div>;

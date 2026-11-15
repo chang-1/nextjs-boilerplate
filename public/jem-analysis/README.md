@@ -1,1 +1,0 @@
-Put generated `results.json` and `crops/` here. Generate them on OSCAR using `scripts/pack_existing_streamlit_data.py` with the existing `hybrid_rescue_seed1` Streamlit CSV and evaluation crops. Do not upload original ImageNet images without appropriate rights.

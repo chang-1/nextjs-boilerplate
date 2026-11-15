@@ -1,71 +1,33 @@
-# Port the EXISTING JEM Streamlit rescue browser to Vercel
+# Research website and JEM explorer
 
-This reproduces the Streamlit rescue/regression browser for **alpha 0.0 vs 0.1**, seed 1, using the data already produced on OSCAR. It does not evaluate the JEM or VAE.
+The Next.js website is deployed on Vercel. `/jem-rescues` compares baseline α=0 and hybrid α=0.1 on all 50,000 ImageNet validation images (seed 1, batch size 4).
 
-## Files
+## Development
 
-- `app/jem-rescues/page.tsx`, `Explorer.tsx`, `explorer.module.css`: replace the old files in your Vercel-linked Next.js repository.
-- `scripts/pack_existing_streamlit_data.py`: run once on OSCAR to package its **existing** Streamlit CSV + evaluation crops into a web-ready folder.
-- `public/jem-analysis/`: target directory in your GitHub Next.js repository (only generated files go here).
+Use Node.js 22, then run `npm ci` and `npm run dev`. Run `npm run build` before publishing.
 
-## On OSCAR
+## JEM data in Cloudflare R2
 
-From `JEM/imagenet/`, copy the `pack_existing_streamlit_data.py` file here and run:
+Dataset root: `https://assets.jorgechang.xyz/seed1-batch4/`
 
-```bash
-python pack_existing_streamlit_data.py \
-  --results-dir ../bl_imagenet28/hybrid_rescue_seed1 \
-  --image-root /oscar/scratch/jchang88/imagenet2/val \
-  --output-dir ./jem_vercel_upload
-```
+- `data/manifest.json`: class names, totals, analysis configuration, detail chunk paths.
+- `data/catalog.json`: compact prediction and confidence rows for filtering and CSV export.
+- `data/details/000.json` through `099.json`: chunks of 500 images with map paths and statistics, fetched on demand.
+- `crops/`: evaluation crops.
+- `maps/`: rendered decoder-Jacobian projections.
 
-The script reads `all_image_predictions.csv`, optional `summary.json`, and optional `class_grouped/classified_examples.csv`, and copies existing JPEGs from `class_grouped/{rescued,regressed}/*/evaluation_crops/`. If a crop is missing and the source JPEG is accessible, it recreates the *evaluation crop only* (Resize shortest side to 256, CenterCrop 224).
+`next.config.ts` forwards `/jem-data/*` to R2 metadata. This allows local development and Vercel preview URLs to load JSON without expanding the R2 browser CORS allowlist. Images load directly from R2; no credentials are required for the public assets. Model inference never runs on Vercel.
 
-Output:
+The original `public/jem-analysis/` dataset has been removed from the current branch and is ignored. Previous commits still contain it; Git history has not been rewritten. Keep numeric arrays in Oscar's `raw_do_not_upload/` directory. Do not commit datasets or upload raw arrays for this viewer.
 
-```
-JEM/imagenet/jem_vercel_upload/
-  results.json
-  crops/
-    00001.jpg
-    ...
-```
+## Explorer
 
-It exports all rescued and regressed crops by default. For a preliminary reduced public gallery, pass `--max-crops 200`; counts remain based on all changed images.
+The existing sidebar, gallery, class counts, confusions, pagination, search, confidence sorting and CSV downloads are retained. The default shows rescued/regressed images; additional filters show both-correct, both-wrong, or all images.
 
-## From OSCAR to GitHub
+Choose **View Jacobians** on a card to compare the crop, baseline, hybrid, difference magnitude and signed channel-mean difference. Ground-truth logit maps exist for every image. Margin maps exist only for rescued/regressed examples, using the same ground-truth-minus-competitor target for both models. The detail panel reports cosine similarity and gradient norms. Overlays use shared per-image 99th-percentile scaling; absolute strengths should not be compared across images using color alone.
 
-Copy the output folder to your computer via OSCAR login host, then place **the contents** of `jem_vercel_upload/` in this path in your GitHub project:
+Confidence is the softmax probability of the predicted class. The export verified all saved predictions before adding confidence values.
 
-```
-nextjs-boilerplate/
-  app/
-    jem-rescues/
-      page.tsx
-      Explorer.tsx
-      explorer.module.css
-  public/
-    jem-analysis/
-      results.json
-      crops/
-        00001.jpg
-        ...
-```
+## Updating the data
 
-Once the Vercel deployment finishes, visit `/jem-rescues`.
-
-The JSON file is a lightweight **conversion of your existing Streamlit CSV**, not a new model result. The existing Streamlit application used the CSV directly; the Next.js page uses this JSON to avoid adding a CSV parsing dependency.
-
-## What is preserved
-
-- Rescued, regressed, net gain, and alpha summary cards.
-- Gallery: status, true class, search, sort, pages of 12/24/36/48, per-image prediction/confidence/name, filtered CSV download.
-- Class counts: top-30 bars, class table, CSV download.
-- Confusions: most common wrong predictions, CSV download.
-- 224×224 evaluation crops only. No original JPEG gallery or re-running inference.
-
-The layout is Streamlit-like, implemented in React/Next.js (Vercel does **not** run the Streamlit Python app unchanged).
-
-### Publishing ImageNet crops
-
-ImageNet access does not grant blanket redistribution rights for individual copyrighted images. Before uploading crops to a **public** GitHub/Vercel deployment, obtain appropriate rights or restrict the image viewer to an access-controlled research audience under applicable permissions.
+Upload the matching crops, maps and metadata together to a new versioned R2 prefix. Update both the rewrite destination in `next.config.ts` and the validated asset root in `app/jem-rescues/data.ts`. Verify counts and representative images/maps before deploying. The legacy scripts in `scripts/` are retained for reference; they are not the input pipeline for this viewer.
