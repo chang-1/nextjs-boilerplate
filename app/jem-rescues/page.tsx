@@ -1,8 +1,8 @@
 import Explorer from "./Explorer";
 
 export const metadata = {
-  title: "JEM Predictions & Jacobians",
-  description: "α=0.0 vs α=0.1: ImageNet predictions, confidence, and decoder-Jacobian comparisons",
+  title: "JEM Predictions & Attributions",
+  description: "α=0.0 vs α=0.1: ImageNet predictions, confidence, and input-gradient and decoder-projection comparisons",
 };
 
 export default function Page() {
