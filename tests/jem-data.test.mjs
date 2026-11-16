@@ -7,7 +7,7 @@ const manifest = {
   classNames: { 0: 'cat', 1: 'dog' }, catalog: 'catalog.json', detailChunkSize: 500,
   detailFiles: { 0: 'details/000.json', 1: 'details/001.json' },
   counts: { rescued: 1, regressed: 1, both_correct: 0, both_wrong: 0 },
-  meta: { complete: true, total: 2, baselineAlpha: 0, hybridAlpha: 0.1, confidencePredictionsVerified: true },
+  meta: { method: "decoder_jacobian_vector_product", complete: true, total: 2, baselineAlpha: 0, hybridAlpha: 0.1, confidencePredictionsVerified: true },
 };
 // Reordered columns ensure mapping follows the published schema rather than fixed offsets.
 const catalog = { columns: ['kind', 'datasetIndex', 'trueLabel', 'filename', 'baselinePred', 'hybridPred', 'confidence0', 'confidence01'],
@@ -49,5 +49,27 @@ test('reject inconsistent counts, duplicate IDs, and unverified confidence', asy
       global.fetch = async url => Response.json(url.endsWith('manifest.json') ? m : c);
       await assert.rejects(loadCatalog());
     }
+  } finally { global.fetch = original; }
+});
+
+test('analysis switching uses separate detail caches and rejects a mismatched method', async () => {
+  const original = global.fetch;
+  const inputManifest = structuredClone(manifest);
+  inputManifest.assetBaseUrl = 'https://assets.jorgechang.xyz/seed1-input-gradients/';
+  inputManifest.meta.method = 'input_pixel_gradient';
+  const calls = [];
+  global.fetch = async url => {
+    calls.push(url);
+    if (url.endsWith('manifest.json')) return Response.json(inputManifest);
+    if (url.endsWith('catalog.json')) return Response.json(catalog);
+    return Response.json({ rows: [{ datasetIndex: 499, kind: 'rescued', trueLabel: 0, baselinePred: 1, hybridPred: 0,
+      maps: { true: { baseline: 'maps/input-only.webp' } } }] });
+  };
+  try {
+    const input = await loadCatalog('input');
+    assert.equal(input.analysis, 'input');
+    assert.equal((await loadDetail(input.rows[0], input)).maps.true.baseline, 'maps/input-only.webp');
+    assert.ok(calls.includes('/jem-input-data/details/000.json'));
+    await assert.rejects(loadCatalog('decoder'), /Incompatible/);
   } finally { global.fetch = original; }
 });

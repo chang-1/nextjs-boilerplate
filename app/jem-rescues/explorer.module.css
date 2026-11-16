@@ -92,3 +92,5 @@
 .site button:focus-visible, .modal button:focus-visible, .modal a:focus-visible { outline: 3px solid #6799ee; outline-offset: 3px; }
 @media(max-width: 900px) { .mapGrid { grid-template-columns: repeat(2,minmax(0,1fr)); } .mapStats { grid-template-columns: repeat(2,1fr); } }
 @media(max-width: 600px) { .modal { padding: 16px; } .modalHeader h2 { font-size: 18px; } .tabs { gap: 0; } .tabs button { padding: 12px 9px; } }
+
+.analysisNote { font-size: 13px; line-height: 1.6; padding: 14px 16px; background: #f4f6fa; border-radius: 8px; color: #526174; }

@@ -31,3 +31,9 @@ Confidence is the softmax probability of the predicted class. The export verifie
 ## Updating the data
 
 Upload the matching crops, maps and metadata together to a new versioned R2 prefix. Update both the rewrite destination in `next.config.ts` and the validated asset root in `app/jem-rescues/data.ts`. Verify counts and representative images/maps before deploying. The legacy scripts in `scripts/` are retained for reference; they are not the input pipeline for this viewer.
+
+## Input-gradient analysis
+
+The default method is now **Input gradients**, with its own dataset at `https://assets.jorgechang.xyz/seed1-input-gradients/`. `/jem-input-data/*` proxies this dataset's JSON. The selector retains the original **Decoder projections** analysis. Each method owns its catalog, predictions, confidence, totals and detail cache; switching clears the open comparison and filters.
+
+Input gradients explain the ground-truth logit through the frozen encoder with respect to RGB crop pixels in [0,1]. Difference maps use hybrid minus baseline before RGB reduction. This dataset has no competitor-margin target. The FP32 input-gradient run changed at least one prediction for 122 images relative to the original run; categories must not be reused across methods. Decoder projections are a different sensitivity analysis, not direct pixel gradients.

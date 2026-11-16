@@ -3,7 +3,7 @@
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import styles from "./explorer.module.css";
 
-import { loadCatalog, type ImageRow, type RescueData, type Kind } from "./data";
+import { analyses, type Analysis, loadCatalog, type ImageRow, type RescueData, type Kind } from "./data";
 import JacobianPanel from "./JacobianPanel";
 type Status = "Changed correctness" | "All images" | "Rescued" | "Regressed" | "Both correct" | "Both wrong";
 const statuses: Status[] = ["Changed correctness", "All images", "Rescued", "Regressed", "Both correct", "Both wrong"];
@@ -29,6 +29,11 @@ function downloadCsv(name: string, rows: Record<string, string | number | null>[
 }
 
 export default function Explorer() {
+  const [analysis, setAnalysis] = useState<Analysis>("input");
+  return <AnalysisExplorer key={analysis} analysis={analysis} onAnalysisChange={setAnalysis} />;
+}
+
+function AnalysisExplorer({ analysis, onAnalysisChange }: { analysis: Analysis; onAnalysisChange: (value: Analysis) => void }) {
   const [data, setData] = useState<RescueData | null>(null);
   const [selected, setSelected] = useState<ImageRow | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -43,11 +48,11 @@ export default function Explorer() {
 
   useEffect(() => {
     let valid = true;
-    loadCatalog()
+    loadCatalog(analysis)
       .then(json => { if (valid) setData(json); })
       .catch(e => { if (valid) setError(e instanceof Error ? e.message : String(e)); });
     return () => { valid = false; };
-  }, []);
+  }, [analysis]);
 
   const classes = useMemo(() => {
     if (!data) return [];
@@ -113,10 +118,15 @@ export default function Explorer() {
       <div className={styles.sidebarTitle}>JEM image explorer</div>
       <div className={styles.sideDivider} />
       <div className={styles.sideHeading}>Data source</div>
+      <label className={styles.fieldLabel} htmlFor="analysis">Attribution method</label>
+      <select id="analysis" className={styles.control} value={analysis} onChange={e => onAnalysisChange(e.target.value as Analysis)}>
+        {Object.entries(analyses).map(([id, option]) => <option value={id} key={id}>{option.label}</option>)}
+      </select>
+      <p className={styles.sideNote}>{analysis === "input" ? "Pixel sensitivity through the encoder (FP32). Explains the same correct-class score for both models." : "Latent sensitivity projected through the decoder. Original analysis with FP16 encoding."}</p>
       <div className={styles.fixedField}><span>Baseline model</span><strong>α = 0.0</strong></div>
       <div className={styles.fixedField}><span>Hybrid model</span><strong>α = 0.1</strong></div>
       <div className={styles.fixedField}><span>Seed</span><strong>1</strong></div>
-      <div className={styles.fixedField}><span>Image view</span><strong>Crops + Jacobians</strong></div>
+      <div className={styles.fixedField}><span>Image view</span><strong>Crops + attribution maps</strong></div>
       <div className={styles.sideDivider} />
       <div className={styles.sideHeading}>Gallery filters</div>
       <label className={styles.fieldLabel}>Status</label>
@@ -145,8 +155,9 @@ export default function Explorer() {
     </aside>
 
     <main className={styles.main}>
-      <h1>🔬 JEM predictions & Jacobians</h1>
+      <h1>🔬 JEM predictions & attributions</h1>
       <p className={styles.subtitle}>Rescued: hybrid α=0.1 correct / baseline α=0 wrong. Regressed: baseline correct / hybrid wrong. Images are 224 × 224 evaluation crops.</p>
+      <p className={styles.analysisNote}><strong>{analyses[analysis].label}.</strong> Each analysis uses its own predictions and confidence. The input-gradient run differs from the earlier run on 122 images; outcome counts can change when switching methods. Maps show local sensitivity, not proof of which features caused a prediction.</p>
       {error && <section className={styles.error}><strong>Unable to load analysis data</strong><p>{error}</p><p>Please reload to retry.</p></section>}
       {!data && !error && <div className={styles.loading}>Loading saved predictions…</div>}
       {data && <>
@@ -166,7 +177,7 @@ export default function Explorer() {
         </div>
         {tab === "Gallery" && <section>
           <div className={styles.tabTitle}><h2>{number(filtered.length)} matching images</h2>
-            <button className={styles.download} onClick={() => downloadCsv("matching_examples.csv", filtered as unknown as Record<string, string | number | null>[])}>Download matching CSV</button>
+            <button className={styles.download} onClick={() => downloadCsv(`${analysis}_matching_examples.csv`, filtered as unknown as Record<string, string | number | null>[])}>Download matching CSV</button>
           </div>
           <div className={styles.pager}>
             <button type="button" disabled={activePage <= 1} onClick={() => setPage(p => Math.max(1, p - 1))}>Previous</button>
@@ -183,7 +194,7 @@ export default function Explorer() {
                 <p>α=0.0: {r.baselineClassName}{confidence(r.confidence0)}</p>
                 <p>α=0.1: {r.hybridClassName}{confidence(r.confidence01)}</p>
                 <small title={r.filename}>{r.filename}</small>
-                <button className={styles.download} onClick={() => setSelected(r)}>View Jacobians</button>
+                <button className={styles.download} onClick={() => setSelected(r)}>View attribution maps</button>
               </div>
             </article>)}
           </div>
@@ -196,7 +207,7 @@ export default function Explorer() {
         </section>}
         {tab === "Class counts" && <section>
           <div className={styles.tabTitle}><h2>Class rescue minus regression counts</h2>
-            <button className={styles.download} onClick={() => downloadCsv("class_counts.csv", classRows as unknown as Record<string, string | number | null>[])}>Download class counts</button>
+            <button className={styles.download} onClick={() => downloadCsv(`${analysis}_class_counts.csv`, classRows as unknown as Record<string, string | number | null>[])}>Download class counts</button>
           </div>
           <p className={styles.subtitle}>Top 30 classes by rescue–regression balance. The table includes all classes.</p>
           <div className={styles.legend}><span className={styles.rescueSquare} /> Rescued <span className={styles.regressionSquare} /> Regressed</div>
@@ -214,7 +225,7 @@ export default function Explorer() {
         </section>}
         {tab === "Confusions" && <section>
           <div className={styles.tabTitle}><h2>Incorrect predictions on changed examples</h2>
-            <button className={styles.download} onClick={() => downloadCsv("confusions.csv", confusions.slice(0, 200) as unknown as Record<string, string | number | null>[])}>Download confusion CSV</button>
+            <button className={styles.download} onClick={() => downloadCsv(`${analysis}_confusions.csv`, confusions.slice(0, 200) as unknown as Record<string, string | number | null>[])}>Download confusion CSV</button>
           </div>
           <div className={styles.tableScroll}><table><thead><tr><th>Outcome</th><th>True class</th><th>Wrong prediction</th><th>Count</th></tr></thead>
           <tbody>{confusions.slice(0, 200).map((r,i) => <tr key={i}><td>{r.kind}</td><td>{r.trueClass}</td><td>{r.wrongClass}</td><td>{r.count}</td></tr>)}</tbody></table></div>
